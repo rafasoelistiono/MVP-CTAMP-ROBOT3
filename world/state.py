@@ -21,6 +21,7 @@ class ObjectState:
     pose: tuple[float, float, float]
     reachable: bool
     near_obstacle: bool
+    rgba: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -53,10 +54,10 @@ class WorldState:
     preserve_obstacles: bool
     max_retries_per_object: int
     allowed_predicates: tuple[str, ...]
+    goal_area_size_xy: tuple[float, float] = (0.52, 0.40)
 
     def object_by_id(self, oid: str) -> ObjectState | None:
         return next((obj for obj in self.objects if obj.id == oid), None)
 
     def all_object_ids(self) -> set[str]:
         return {obj.id for obj in self.objects}
-

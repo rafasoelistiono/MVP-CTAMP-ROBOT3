@@ -25,3 +25,11 @@ cautious_obstacle_clearance_m = 0.22
 [grasp]
 obstacle_cube_grip = 0.026
 obstacle_cylinder_grip = 0.012
+place_release_lift_m = 0.005
+stack_release_lift_m = 0.008
+release_guide_clearance_m = 0.008
+place_settle_before_open_steps = 120
+release_guide_steps = 240
+release_guide_settle_steps = 160
+release_open_steps = 320
+release_post_open_settle_steps = 160

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -111,6 +111,19 @@ OBSTACLE_POSITIONS = {
 }
 
 
+class _SceneObject(Protocol):
+    id: str
+    cls: str
+    pose: tuple[float, float, float]
+    rgba: tuple[float, float, float, float] | None
+
+
+class _SceneObstacle(Protocol):
+    id: str
+    pose: tuple[float, float, float]
+    height: str
+
+
 def normalize_scene_key(raw: str | Iterable[str] | None) -> str:
     if raw is None:
         return "group_no_obs"
@@ -145,6 +158,8 @@ def prepare_scene_variant(
     raw: str | Iterable[str] | None,
     *,
     base_model_file: str | Path | None = None,
+    object_states: Iterable[_SceneObject] | None = None,
+    obstacle_states: Iterable[_SceneObstacle] | None = None,
 ) -> Path:
     scene_key = normalize_scene_key(raw)
     _validate_variant(scene_key)
@@ -178,13 +193,36 @@ def prepare_scene_variant(
             break
 
     inserts = [_goal_area_body()]
-    for object_name, pos in VARIANT_OBJECTS[scene_key].items():
-        inserts.append(_movable_body(object_name, pos))
+    if object_states is None:
+        for object_name, pos in VARIANT_OBJECTS[scene_key].items():
+            inserts.append(_movable_body(object_name, pos))
+    else:
+        for state in object_states:
+            inserts.append(
+                _movable_body(
+                    state.id,
+                    state.pose,
+                    cls=state.cls,
+                    rgba_override=getattr(state, "rgba", None),
+                )
+            )
+
     if obstacle_mode_for_scene(scene_key) == "obs":
-        half_height = _obstacle_half_height_for_scene(scene_key)
         fixed = scene_key.endswith("_long_obs")
-        for obstacle_name, pos in _obstacle_positions_for_scene(scene_key).items():
-            inserts.append(_obstacle_body(obstacle_name, pos, half_height=half_height, fixed=fixed))
+        if obstacle_states is None:
+            half_height = _obstacle_half_height_for_scene(scene_key)
+            for obstacle_name, pos in _obstacle_positions_for_scene(scene_key).items():
+                inserts.append(_obstacle_body(obstacle_name, pos, half_height=half_height, fixed=fixed))
+        else:
+            for state in obstacle_states:
+                half_height = (
+                    LONG_OBSTACLE_HALF_HEIGHT
+                    if state.height == "long"
+                    else DEFAULT_OBSTACLE_HALF_HEIGHT
+                )
+                inserts.append(
+                    _obstacle_body(state.id, state.pose, half_height=half_height, fixed=fixed)
+                )
 
     for offset, body in enumerate(inserts):
         worldbody.insert(link0_index + offset, body)
@@ -264,18 +302,31 @@ def _goal_area_body() -> ET.Element:
     )
 
 
-def _movable_body(name: str, pos: tuple[float, float, float]) -> ET.Element:
-    rgba = {
+def _movable_body(
+    name: str,
+    pos: tuple[float, float, float],
+    *,
+    cls: str | None = None,
+    rgba_override: tuple[float, float, float, float] | None = None,
+) -> ET.Element:
+    rgba = " ".join(str(value) for value in rgba_override) if rgba_override else {
         "cube1": "1 0 0 1",
         "cube2": "0 1 0 1",
         "cube3": "0 0 1 1",
         "cube4": "1 1 0 1",
+        "cube5": "1 0.4 0 1",
+        "cube6": "0.6 0 1 1",
+        "cube7": "0 0.65 1 1",
+        "cube8": "0.9 0.2 0.6 1",
+        "cube9": "0.55 0.35 0.1 1",
+        "cube10": "0.8 0.8 0.8 1",
         "circle1": "0.0 0.9 0.9 1",
         "circle2": "0.1 0.7 1.0 1",
         "circle3": "0.2 1.0 0.45 1",
         "circle4": "0.3 0.9 0.2 1",
     }.get(name, "1 1 1 1")
-    if name.startswith("cube"):
+    object_class = cls or ("cube" if name.startswith("cube") else "cylinder")
+    if object_class == "cube":
         half_x, half_y, half_z = CUBE_HALF_EXTENTS
         geom = f'<geom type="box" size="{half_x} {half_y} {half_z}" mass="0.1" friction="2 1 0.5" contype="1" conaffinity="1" rgba="{rgba}"/>'
     else:

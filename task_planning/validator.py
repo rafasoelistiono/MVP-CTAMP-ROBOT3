@@ -46,17 +46,19 @@ def _gate_1_schema(plan: TaskPlan) -> None:
         raise PlanValidationError(
             f"gate 1: task name must be a lowercase plugin identifier, got {plan.task!r}"
         )
-    if plan.slot_config.type not in {"line", "tower"}:
+    if plan.slot_config.type not in {"line", "tower", "pyramid"}:
         raise PlanValidationError(
-            f"gate 1: slot_config.type must be 'line' or 'tower', "
+            f"gate 1: slot_config.type must be 'line', 'tower', or 'pyramid', "
             f"got {plan.slot_config.type!r}"
         )
     if plan.slot_config.axis != "x":
-        raise PlanValidationError("gate 1: only line axis 'x' is currently supported")
+        raise PlanValidationError("gate 1: only slot axis 'x' is currently supported")
     if plan.slot_config.spacing_m <= 0:
         raise PlanValidationError("gate 1: slot spacing must be positive")
     if plan.slot_config.layer_height_m <= 0:
         raise PlanValidationError("gate 1: tower layer height must be positive")
+    if plan.slot_config.type == "pyramid":
+        _validate_pyramid_slot_schema(plan)
     if not plan.scene_id.strip():
         raise PlanValidationError("gate 1: scene_id must not be empty")
     if not plan.steps:
@@ -84,6 +86,27 @@ def _gate_1_schema(plan: TaskPlan) -> None:
             raise PlanValidationError(
                 f"gate 1: stack_place step {step.step_id} requires on_top_of"
             )
+
+
+def _validate_pyramid_slot_schema(plan: TaskPlan) -> None:
+    config = plan.slot_config
+    if config.row_count <= 0:
+        raise PlanValidationError("gate 1: pyramid row_count must be positive")
+    if config.base_row_length <= 0:
+        raise PlanValidationError("gate 1: pyramid base_row_length must be positive")
+    if config.row_count != config.base_row_length:
+        raise PlanValidationError(
+            "gate 1: pyramid row_count must equal base_row_length for a 4-3-2-1 style task"
+        )
+    expected_targets = config.row_count * (config.row_count + 1) // 2
+    if expected_targets != len(plan.target_objects):
+        raise PlanValidationError(
+            "gate 1: pyramid target count must equal "
+            f"row_count*(row_count+1)/2; expected {expected_targets}, "
+            f"got {len(plan.target_objects)}"
+        )
+    if config.row_spacing_m <= 0:
+        raise PlanValidationError("gate 1: pyramid row_spacing_m must be positive")
 
 
 def _gate_2_object_whitelist(

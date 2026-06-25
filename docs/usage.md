@@ -65,6 +65,17 @@ python -m cli.generate_plan \
   --output task_plans/generated
 ```
 
+Untuk challenge stacked pyramid 6 cube dengan susunan vertikal 3-2-1, gunakan
+pasangan context/plan berikut:
+
+```bash
+python -m cli.generate_plan \
+  --context contexts/examples/ungroup_obs_pyramid_cubes.md \
+  --task pyramid \
+  --response-file task_plans/examples/ungroup_obs_pyramid_cubes.json \
+  --output task_plans/generated
+```
+
 Gunakan suffix model pada nama response, misalnya
 `ungroup_obs_stack_cubes_qwen_3_coder.json`. `generate_plan` akan otomatis
 mempertahankan `qwen_3_coder` pada nama plan generated. `run_simulation` lalu
@@ -102,6 +113,21 @@ python -m cli.run_simulation \
 
 Untuk tower, ganti plan dan context dengan pasangan
 `ungroup_obs_stack_cubes`. Backend tidak memanggil LLM.
+
+Untuk stacked pyramid, gunakan hasil generated dari command sebelumnya:
+
+```bash
+python -m cli.run_simulation \
+  --plan task_plans/generated/ungroup_obs_pyramid_cubes_pyramid.json \
+  --context contexts/examples/ungroup_obs_pyramid_cubes.md \
+  --scene ungroup_obs \
+  --runtime-config configuration/profiles/runtime/pyramid.toml \
+  --no-viewer
+```
+
+Profile `pyramid.toml` menyimpan tuning release dan settle untuk stacked
+pyramid. Jangan fine-tune angka release di plugin atau backend; ubah profile
+TOML agar run berikutnya tetap reproducible.
 
 Untuk example stack Panda, setiap cube berukuran `0.066 x 0.066 x 0.066 m`
 dan `layer_height_m=0.066` adalah nominal symbolic.

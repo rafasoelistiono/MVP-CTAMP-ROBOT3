@@ -1,0 +1,27 @@
+extends = "obstacle"
+name = "local_pyramid"
+
+[motion]
+time_limit_s = 8.0
+settle_steps_per_waypoint = 12
+final_settle_steps = 48
+
+[grasp]
+place_release_lift_m = 0.001
+stack_release_lift_m = 0.008
+release_guide_clearance_m = 0.002
+place_settle_before_open_steps = 160
+release_guide_steps = 320
+release_guide_settle_steps = 220
+release_open_steps = 420
+release_post_open_settle_steps = 240
+obstacle_cube_grip = 0.026
+obstacle_cylinder_grip = 0.012
+
+[recovery]
+verification_settle_steps = 90
+
+[verification]
+stack_max_tilt_rad = 0.35
+stack_max_linear_velocity_mps = 0.02
+stack_max_angular_velocity_radps = 0.20

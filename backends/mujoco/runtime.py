@@ -1961,8 +1961,14 @@ def place(
         return
 
     # 3) Let the arm settle before opening.
-    _log_arm_state("PLACE", "SETTLE_BEFORE_OPEN", object_id=obj, target_xyz=_round_vec(release_xyz, 4), steps=120)
-    for _ in range(120):
+    _log_arm_state(
+        "PLACE",
+        "SETTLE_BEFORE_OPEN",
+        object_id=obj,
+        target_xyz=_round_vec(release_xyz, 4),
+        steps=CONFIG.grasp.place_settle_before_open_steps,
+    )
+    for _ in range(CONFIG.grasp.place_settle_before_open_steps):
         mujoco.mj_step(model, data)
         viewer.sync()
 
@@ -1979,14 +1985,14 @@ def place(
         target_xyz=_round_vec(place_pos, 4),
         grip=guide_target,
     )
-    set_grip(guide_target, steps=240)
-    _step_sim(160, grip=guide_target)
-    set_grip(OPEN_GRIP, steps=320)
+    set_grip(guide_target, steps=CONFIG.grasp.release_guide_steps)
+    _step_sim(CONFIG.grasp.release_guide_settle_steps, grip=guide_target)
+    set_grip(OPEN_GRIP, steps=CONFIG.grasp.release_open_steps)
     print(f"[exec] finger after open:  {_finger_pos():.4f}")
     _log_arm_state("PLACE", "GRIP_OPENED", object_id=obj, target_xyz=_round_vec(place_pos, 4), finger_after=round(_finger_pos(), 4))
 
     # 4) Let the cube fall and settle.
-    for _ in range(160):
+    for _ in range(CONFIG.grasp.release_post_open_settle_steps):
         mujoco.mj_step(model, data)
         viewer.sync()
 

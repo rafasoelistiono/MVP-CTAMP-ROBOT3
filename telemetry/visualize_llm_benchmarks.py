@@ -20,9 +20,11 @@ MODELS: tuple[tuple[str, str], ...] = (
     ("qwen3coder", "Qwen3\nCoder"),
     ("minimaxm3", "MiniMax\nM3"),
     ("gptoss", "GPT-OSS"),
+    ("sonnet46", "Sonnet\n4.6"),
+    ("gpt55", "GPT-5.5"),
 )
 
-MODEL_COLORS = ("#2563EB", "#7C3AED", "#EA580C", "#0F766E")
+MODEL_COLORS = ("#2563EB", "#7C3AED", "#EA580C", "#0F766E", "#9333EA", "#0891B2")
 EXECUTION_COLORS = ("#94A3B8", "#2563EB")
 
 
@@ -230,7 +232,7 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
 
     names = [item.model_name for item in metrics]
     x = np.arange(len(metrics))
-    figure, axes = plt.subplots(2, 2, figsize=(15, 9))
+    figure, axes = plt.subplots(2, 2, figsize=(18, 9))
     figure.subplots_adjust(
         left=0.13,
         right=0.93,
@@ -240,7 +242,7 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
         hspace=0.38,
     )
     figure.suptitle(
-        f"{task.upper()} benchmark — 4 LLM TaskPlans",
+        f"{task.upper()} benchmark — {len(metrics)} LLM TaskPlans",
         fontsize=20,
         fontweight="bold",
     )

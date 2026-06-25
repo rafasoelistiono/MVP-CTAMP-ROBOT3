@@ -142,6 +142,8 @@ def main() -> int:
     scene_file = prepare_scene_variant(
         world.variant,
         base_model_file=runtime_config.model.xml_path,
+        object_states=world.objects,
+        obstacle_states=world.obstacles,
     )
     runtime_config = replace(
         runtime_config,

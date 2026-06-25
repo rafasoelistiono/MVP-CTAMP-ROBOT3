@@ -6,9 +6,10 @@ from plugins.registry import DEFAULT_REGISTRY, PluginRegistry
 from configuration import load_runtime_config
 
 
-def test_default_registry_contains_align_and_stack():
-    assert DEFAULT_REGISTRY.names() == ("align", "stack")
+def test_default_registry_contains_align_stack_and_pyramid():
+    assert DEFAULT_REGISTRY.names() == ("align", "pyramid", "stack")
     assert DEFAULT_REGISTRY.get("align").name == "align"
+    assert DEFAULT_REGISTRY.get("pyramid").name == "pyramid"
     assert DEFAULT_REGISTRY.get("stack").name == "stack"
 
 

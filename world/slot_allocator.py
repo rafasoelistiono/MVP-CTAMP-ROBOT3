@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 from task_planning.types import SlotConfig
 
@@ -21,6 +22,8 @@ def allocate_slots(
         return _allocate_line(config, n)
     if config.type == "tower":
         return _allocate_tower(config, n)
+    if config.type == "pyramid":
+        return resolve_pyramid_slots(config, tuple(f"cube{index + 1}" for index in range(n)))
     raise SlotAllocationError(f"unknown slot type: {config.type}")
 
 
@@ -58,6 +61,46 @@ def _allocate_tower(
     return slots
 
 
+def resolve_pyramid_slots(
+    config: SlotConfig,
+    target_objects: Sequence[str],
+) -> dict[str, tuple[float, float, float]]:
+    if config.axis != "x":
+        raise SlotAllocationError("only pyramid row axis 'x' is currently supported")
+    if config.row_count <= 0:
+        raise SlotAllocationError("pyramid row_count must be positive")
+    if config.base_row_length <= 0:
+        raise SlotAllocationError("pyramid base_row_length must be positive")
+    expected = config.row_count * (config.row_count + 1) // 2
+    if len(target_objects) != expected:
+        raise SlotAllocationError(
+            "pyramid slot count must equal row_count*(row_count+1)/2: "
+            f"expected {expected}, got {len(target_objects)}"
+        )
+
+    slots: dict[str, tuple[float, float, float]] = {}
+    assigned = 0
+    for row in range(config.row_count):
+        row_length = config.base_row_length - row
+        if row_length <= 0:
+            raise SlotAllocationError(
+                f"pyramid row {row} has non-positive length {row_length}"
+            )
+        start_x = config.center_x - ((row_length - 1) / 2.0) * config.spacing_m
+        y = config.base_y
+        z = config.base_z + row * config.layer_height_m
+        for column in range(row_length):
+            if assigned >= len(target_objects):
+                raise SlotAllocationError("pyramid target_objects ended before slots")
+            slots[f"row{row}_col{column}"] = (
+                start_x + column * config.spacing_m,
+                y,
+                z,
+            )
+            assigned += 1
+    return slots
+
+
 def validate_slots(
     slots: dict[str, tuple[float, float, float]],
     world: WorldState,
@@ -77,6 +120,17 @@ def validate_slots(
         if z < world.table_z_top:
             raise SlotAllocationError(
                 f"{slot_id} z={z:.4f} is below table top {world.table_z_top:.4f}"
+            )
+        goal_half_x = world.goal_area_size_xy[0] / 2.0
+        goal_half_y = world.goal_area_size_xy[1] / 2.0
+        goal_x, goal_y, _ = world.goal_center
+        if not (goal_x - goal_half_x <= x <= goal_x + goal_half_x):
+            raise SlotAllocationError(
+                f"{slot_id} is outside goal area x bounds: coordinate=({x:.4f}, {y:.4f}, {z:.4f})"
+            )
+        if not (goal_y - goal_half_y <= y <= goal_y + goal_half_y):
+            raise SlotAllocationError(
+                f"{slot_id} is outside goal area y bounds: coordinate=({x:.4f}, {y:.4f}, {z:.4f})"
             )
         for obstacle in world.obstacles:
             clearance = math.dist((x, y), obstacle.pose[:2])

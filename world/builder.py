@@ -126,6 +126,26 @@ def _tuple_numbers(value: Any, length: int, path: str) -> tuple[float, ...]:
         raise ContextValidationError(f"{path} must contain only numbers") from exc
 
 
+def _object_rgba(raw: dict, path: str) -> tuple[float, float, float, float] | None:
+    if "rgba" in raw:
+        return _tuple_numbers(raw["rgba"], 4, f"{path}.rgba")  # type: ignore[return-value]
+    color = str(raw.get("color", "")).strip().lower()
+    if not color:
+        return None
+    palette = {
+        "green": (0.0, 0.85, 0.10, 1.0),
+        "red": (1.0, 0.05, 0.02, 1.0),
+        "yellow": (1.0, 0.90, 0.0, 1.0),
+        "blue": (0.0, 0.20, 1.0, 1.0),
+        "white": (1.0, 1.0, 1.0, 1.0),
+    }
+    if color not in palette:
+        raise ContextValidationError(
+            f"{path}.color must be one of {sorted(palette)}"
+        )
+    return palette[color]
+
+
 def build_world_state(path: str | Path) -> WorldState:
     context_path = Path(path)
     try:
@@ -277,6 +297,7 @@ def build_world_state(path: str | Path) -> WorldState:
                 pose=pose,
                 reachable=reachable,
                 near_obstacle=near_obstacle,
+                rgba=_object_rgba(raw, f"objects[{index}]"),
             )
         )
 
@@ -357,6 +378,11 @@ def build_world_state(path: str | Path) -> WorldState:
         table_y_range=_tuple_numbers(table["y_range"], 2, "table.y_range"),
         table_z_top=float(table["z_top"]),
         goal_center=_tuple_numbers(table["goal_center"], 3, "table.goal_center"),
+        goal_area_size_xy=_tuple_numbers(
+            table.get("goal_area_size_xy", [0.52, 0.40]),
+            2,
+            "table.goal_area_size_xy",
+        ),
         robot_id=robot_id,
         robot_base_xy=base_xy,
         robot_reach_min=reach_min,

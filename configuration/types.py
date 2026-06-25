@@ -53,6 +53,11 @@ class GraspConfig:
     place_release_lift_m: float = 0.005
     stack_release_lift_m: float = 0.008
     release_guide_clearance_m: float = 0.008
+    place_settle_before_open_steps: int = 120
+    release_guide_steps: int = 240
+    release_guide_settle_steps: int = 160
+    release_open_steps: int = 320
+    release_post_open_settle_steps: int = 160
     # A 66 mm cube contacts each finger near q=0.033 m.  Commanding the old
     # 15-21 mm targets over-compressed the cube, while 28-30 mm left too
     # little normal force during the tall-stack descent. These moderate
@@ -178,6 +183,15 @@ class RuntimeConfig:
             or self.grasp.release_guide_clearance_m <= 0
         ):
             errors.append("grasp release tuning must be positive or zero-lift")
+        release_step_values = (
+            self.grasp.place_settle_before_open_steps,
+            self.grasp.release_guide_steps,
+            self.grasp.release_guide_settle_steps,
+            self.grasp.release_open_steps,
+            self.grasp.release_post_open_settle_steps,
+        )
+        if any(value < 0 for value in release_step_values):
+            errors.append("grasp release step counts must be non-negative")
         if len(self.grasp.pick_grip_sequence) != len(self.grasp.pick_offset_sequence_m):
             errors.append("cube grip and offset sequences must have equal length")
         if len(self.grasp.cylinder_grip_sequence) != len(
