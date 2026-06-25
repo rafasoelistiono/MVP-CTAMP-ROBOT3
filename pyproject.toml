@@ -30,7 +30,6 @@ ctamp-run = "cli.run_simulation:cli"
 [tool.setuptools.packages.find]
 where = ["."]
 include = [
-  "adaptive*",
   "backends*",
   "cli*",
   "configuration*",

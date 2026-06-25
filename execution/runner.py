@@ -5,8 +5,8 @@ import re
 import time
 from dataclasses import dataclass
 
-from adaptive.event_log import EventLog
-from adaptive.hint_cache import HintCache
+from backends.adaptive.event_log import EventLog
+from backends.adaptive.hint_cache import HintCache
 from configuration import RuntimeConfig, get_active_runtime_config
 from task_planning.types import Step, TaskPlan
 from plugins.registry import PluginRegistry
@@ -516,6 +516,8 @@ class TaskRunner:
         if step.action == "place":
             target = self.slots.get(step.slot or "")
             extent = getattr(self.primitives, "object_vertical_half_extent", None)
+            if target is not None and self.plan.task == "pyramid":
+                target = self._resolve_pyramid_target(step, target)
             if (
                 target is not None
                 and self.plan.task == "stack"
@@ -548,6 +550,68 @@ class TaskRunner:
                 support[2] + layer_height,
             )
         return None
+
+    def _resolve_pyramid_target(
+        self,
+        step: Step,
+        target: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        if not step.slot:
+            return target
+        match = re.fullmatch(r"row(\d+)_col(\d+)", step.slot)
+        if match is None:
+            return target
+        row = int(match.group(1))
+        column = int(match.group(2))
+        if row == 0:
+            return target
+
+        support_ids = self._pyramid_support_objects(row, column)
+        if support_ids is None:
+            return target
+        left_support, right_support = (
+            self.primitives.object_pose(support_ids[0]),
+            self.primitives.object_pose(support_ids[1]),
+        )
+        layer_height = self.plan.slot_config.layer_height_m
+        extent = getattr(self.primitives, "object_vertical_half_extent", None)
+        if callable(extent):
+            layer_height = max(float(extent(object_id)) for object_id in support_ids)
+            layer_height += float(extent(step.object))
+
+        resolved = (
+            (left_support[0] + right_support[0]) / 2.0,
+            (left_support[1] + right_support[1]) / 2.0,
+            max(left_support[2], right_support[2]) + layer_height,
+        )
+        self.slots[step.slot] = resolved
+        return resolved
+
+    def _pyramid_support_objects(
+        self,
+        row: int,
+        column: int,
+    ) -> tuple[str, str] | None:
+        slot_to_object = {
+            slot_id: object_id
+            for object_id, slot_id in zip(
+                self.plan.target_objects,
+                self._pyramid_slot_order(),
+            )
+        }
+        left = slot_to_object.get(f"row{row - 1}_col{column}")
+        right = slot_to_object.get(f"row{row - 1}_col{column + 1}")
+        if left is None or right is None:
+            return None
+        return left, right
+
+    def _pyramid_slot_order(self) -> tuple[str, ...]:
+        config = self.plan.slot_config
+        slot_ids: list[str] = []
+        for row in range(config.row_count):
+            row_length = config.base_row_length - row
+            slot_ids.extend(f"row{row}_col{column}" for column in range(row_length))
+        return tuple(slot_ids)
 
     def _effects_observed(self, step: Step) -> bool:
         # LLM effects may add checks, but cannot replace the physical effects

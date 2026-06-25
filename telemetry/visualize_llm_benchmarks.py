@@ -1,4 +1,4 @@
-"""Generate align and stack benchmark figures from telemetry CSV files.
+"""Generate benchmark figures from telemetry CSV files.
 
 The newest run for every task/model pair is selected.  Execution telemetry is
 kept separate from symbolic-plan quality so a summary counter cannot hide an
@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
-MODELS: tuple[tuple[str, str], ...] = (
+BASE_MODELS: tuple[tuple[str, str], ...] = (
     ("deepseekv4flash", "DeepSeek\nV4 Flash"),
     ("qwen3coder", "Qwen3\nCoder"),
     ("minimaxm3", "MiniMax\nM3"),
@@ -23,6 +25,18 @@ MODELS: tuple[tuple[str, str], ...] = (
     ("sonnet46", "Sonnet\n4.6"),
     ("gpt55", "GPT-5.5"),
 )
+TASK_MODELS: dict[str, tuple[tuple[str, str], ...]] = {
+    "align": BASE_MODELS,
+    "stack": BASE_MODELS,
+    "pyramid": (
+        ("deepseekv4flash", "DeepSeek\nV4 Flash"),
+        ("qwen3coder", "Qwen3\nCoder"),
+        ("minimaxm27", "MiniMax\nM2.7"),
+        ("gptoss", "GPT-OSS"),
+        ("sonnet46", "Sonnet\n4.6"),
+        ("gpt55", "GPT-5.5"),
+    ),
+}
 
 MODEL_COLORS = ("#2563EB", "#7C3AED", "#EA580C", "#0F766E", "#9333EA", "#0891B2")
 EXECUTION_COLORS = ("#94A3B8", "#2563EB")
@@ -33,6 +47,7 @@ class RunMetrics:
     model_id: str
     model_name: str
     run_id: str
+    target_count: int
     completion_percent: float
     verified_placement_percent: float
     final_goal_percent: float
@@ -107,6 +122,14 @@ def _geometry_errors_mm(
             "base Z": 1000.0 * abs(float(actual["base_z"]) - float(expected["base_z"])),
         }
     return {
+        **(
+            {
+                "spacing": 1000.0
+                * abs(float(actual["spacing_m"]) - float(expected["spacing_m"]))
+            }
+            if task == "pyramid"
+            else {}
+        ),
         "base Z": 1000.0 * abs(float(actual["base_z"]) - float(expected["base_z"])),
         "layer height": 1000.0
         * abs(float(actual["layer_height_m"]) - float(expected["layer_height_m"])),
@@ -148,7 +171,7 @@ def collect_task_metrics(repo_root: Path, task: str) -> list[RunMetrics]:
     )
     results: list[RunMetrics] = []
 
-    for model_id, model_name in MODELS:
+    for model_id, model_name in TASK_MODELS[task]:
         summary_path = _latest_summary(logs_dir, task, model_id)
         summary_rows = _read_csv(summary_path)
         if len(summary_rows) != 1:
@@ -190,6 +213,7 @@ def collect_task_metrics(repo_root: Path, task: str) -> list[RunMetrics]:
                 model_id=model_id,
                 model_name=model_name,
                 run_id=run_id,
+                target_count=target_count,
                 completion_percent=float(summary["completion_percent"]),
                 verified_placement_percent=100.0 * len(verified_objects) / target_count,
                 final_goal_percent=100.0 if _as_bool(summary["success"]) else 0.0,
@@ -224,6 +248,9 @@ def _label_bars(axis: Any, bars: Any, suffix: str = "%") -> None:
 
 
 def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
+    os.environ.setdefault(
+        "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "ctamp-matplotlib")
+    )
     try:
         import matplotlib.pyplot as plt
         import numpy as np
@@ -257,7 +284,7 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
     bars_b = axis.bar(x + width / 2, verified, width, color=EXECUTION_COLORS[1], label="Verified placements")
     axis.axhline(100, color="#16A34A", linestyle="--", linewidth=1.4, label="Goal target")
     axis.set_title("Execution progress")
-    axis.set_ylabel("Percent of 4 target cubes")
+    axis.set_ylabel(f"Percent of {metrics[0].target_count} target cubes")
     axis.set_ylim(0, 118)
     axis.set_xticks(x, names)
     axis.legend(loc="lower right", fontsize=8)
@@ -332,16 +359,19 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
     # identical to the reference and are documented in README.
     axis = axes[1, 1]
     geometry_labels = list(metrics[0].geometry_errors_mm)
-    geometry_width = 0.34
-    offsets = (-geometry_width / 2, geometry_width / 2)
-    geometry_colors = ("#F59E0B", "#DB2777")
+    geometry_width = min(0.8 / max(len(geometry_labels), 1), 0.28)
+    offsets = [
+        (index - (len(geometry_labels) - 1) / 2) * geometry_width
+        for index in range(len(geometry_labels))
+    ]
+    geometry_colors = ("#F59E0B", "#DB2777", "#10B981")
     for index, label in enumerate(geometry_labels):
         values = [item.geometry_errors_mm[label] for item in metrics]
         bars = axis.bar(
             x + offsets[index],
             values,
             geometry_width,
-            color=geometry_colors[index],
+            color=geometry_colors[index % len(geometry_colors)],
             label=f"|Δ {label}|",
         )
         for bar, value in zip(bars, values):
@@ -369,12 +399,18 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
             for item in metrics
         )
         note = f"missing_place_target attempts: {missing}"
-    else:
+    elif task == "stack":
         rebuilds = ", ".join(
             f"{item.model_name.replace(chr(10), ' ')}={item.stack_rebuilds}"
             for item in metrics
         )
         note = f"STACK_REBUILD count: {rebuilds}"
+    else:
+        verified = ", ".join(
+            f"{item.model_name.replace(chr(10), ' ')}={item.verified_placement_percent:.0f}%"
+            for item in metrics
+        )
+        note = f"verified pyramid placements: {verified}"
     figure.text(
         0.5,
         0.008,
@@ -419,8 +455,12 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
     output_dir = (args.output_dir or repo_root / "docs" / "images").resolve()
 
-    for task in ("align", "stack"):
-        metrics = collect_task_metrics(repo_root, task)
+    for task in ("align", "stack", "pyramid"):
+        try:
+            metrics = collect_task_metrics(repo_root, task)
+        except FileNotFoundError as exc:
+            print(f"SKIP {task.upper()}: {exc}")
+            continue
         output_path = output_dir / f"llm_{task}_benchmark.png"
         plot_task(metrics, task, output_path)
         _print_summary(task, metrics)

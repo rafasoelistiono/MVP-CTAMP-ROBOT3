@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from adaptive.hint_cache import ExecutionHints
+from backends.adaptive.hint_cache import ExecutionHints
 from task_planning.types import Step
 
 

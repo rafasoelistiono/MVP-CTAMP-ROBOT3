@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from adaptive.event_log import EventLog
-from adaptive.hint_cache import HintCache
+from backends.adaptive.event_log import EventLog
+from backends.adaptive.hint_cache import HintCache
 from configuration import load_runtime_config
 from execution.primitives import PrimitiveResult
 from execution.runner import TaskRunner

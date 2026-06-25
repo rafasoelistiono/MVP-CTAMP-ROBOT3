@@ -577,6 +577,49 @@ def _check_live_collision(
     return False
 
 
+def _body_name_for_geom(geom_id: int) -> Optional[str]:
+    body_id = int(model.geom_bodyid[int(geom_id)])
+    return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+
+
+def _merge_ignored_body_names(
+    *groups: Optional[Sequence[str]],
+) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for body_name in group or ():
+            if body_name not in seen:
+                seen.add(body_name)
+                merged.append(body_name)
+    return merged
+
+
+def _current_robot_movable_contacts(
+    ignored_body_names: Optional[Sequence[str]] = None,
+) -> list[str]:
+    """Movable bodies already touching the robot in the live simulator state."""
+    ignored = set(ignored_body_names or [])
+    contacts: list[str] = []
+    seen: set[str] = set()
+    mujoco.mj_forward(model, data)
+    for contact_index in range(data.ncon):
+        contact = data.contact[contact_index]
+        body1 = _body_name_for_geom(int(contact.geom1))
+        body2 = _body_name_for_geom(int(contact.geom2))
+        if body1 in active_robot_body_names and body2 in name_to_cube:
+            movable_body = body2
+        elif body2 in active_robot_body_names and body1 in name_to_cube:
+            movable_body = body1
+        else:
+            continue
+        if movable_body in ignored or movable_body in seen:
+            continue
+        seen.add(movable_body)
+        contacts.append(movable_body)
+    return contacts
+
+
 def _finger_pos() -> float:
     finger_qposadr = model.joint(finger_joint_name).qposadr[0]
     return float(data.qpos[finger_qposadr])
@@ -1996,12 +2039,28 @@ def place(
         mujoco.mj_step(model, data)
         viewer.sync()
 
+    post_release_ignored = [obj]
+    if post_place_ignored_body_names is None:
+        contact_ignored = _current_robot_movable_contacts(post_release_ignored)
+        post_release_ignored = _merge_ignored_body_names(
+            post_release_ignored,
+            contact_ignored,
+        )
+        if contact_ignored:
+            _log_arm_state(
+                "PLACE",
+                "POST_RELEASE_CONTACTS",
+                object_id=obj,
+                ignored_body_names=post_release_ignored,
+                contact_body_names=contact_ignored,
+            )
+
     # 5) Retreat upward using OMPL.
     if not _move_pose_safe(
         retreat_xyz,
         grip=OPEN_GRIP,
         null_ref=place_ref,
-        ignored_body_names=[obj],
+        ignored_body_names=post_release_ignored,
         label=f"place({x:.3f}, {y:.3f}, {target_z:.3f}) retreat",
         cautious_motion=cautious_motion,
     ):
@@ -2012,7 +2071,11 @@ def place(
 
     _held_object_name = None
     _held_grip_target = 0.015
-    post_place_ignored = [obj] if post_place_ignored_body_names is None else list(post_place_ignored_body_names)
+    post_place_ignored = (
+        post_release_ignored
+        if post_place_ignored_body_names is None
+        else list(post_place_ignored_body_names)
+    )
     _move_to_grasp_ready(
         f"after place({x:.3f}, {y:.3f}, {target_z:.3f})",
         grip=OPEN_GRIP,
@@ -2025,4 +2088,3 @@ def place(
         object_id=obj,
         target_xyz=[round(float(x), 4), round(float(y), 4), round(float(target_z), 4)],
     )
-

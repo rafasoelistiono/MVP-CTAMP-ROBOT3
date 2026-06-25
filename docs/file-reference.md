@@ -73,12 +73,12 @@ Dokumen ini menjelaskan file source yang dipertahankan setelah cleanup.
 | `execution/verifier.py` | `at`, `on`, `clear`, `holding`, `handempty`, dan row checks dari live pose. |
 | `execution/recovery.py` | Bounded retry/replan/abort policy; obstacle failure selalu fatal. |
 
-## Adaptive dan telemetry
+## Backend adaptive dan telemetry
 
 | File | Fungsi utama |
 |---|---|
-| `adaptive/hint_cache.py` | Historical hint untuk backend, IK tolerance, dan grasp profile. |
-| `adaptive/event_log.py` | Structured append-only TaskRunner CSV. |
+| `backends/adaptive/hint_cache.py` | Historical hint untuk backend, IK tolerance, dan grasp profile. |
+| `backends/adaptive/event_log.py` | Structured append-only TaskRunner CSV. |
 | `telemetry/run_manifest.py` | Full resolved config, file hashes, platform, dan provenance JSON. |
 | `telemetry/summary.py` | Compact result/failure summary CSV. |
 

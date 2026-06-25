@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from adaptive.event_log import EventLog
-from adaptive.hint_cache import HintCache
+from backends.adaptive.event_log import EventLog
+from backends.adaptive.hint_cache import HintCache
 from execution.primitives import PrimitiveResult
 from execution.runner import TaskRunner
 from task_planning.loader import parse_plan

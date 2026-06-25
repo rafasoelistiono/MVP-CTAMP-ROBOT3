@@ -8,8 +8,8 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
-from adaptive.event_log import EventLog
-from adaptive.hint_cache import HintCache
+from backends.adaptive.event_log import EventLog
+from backends.adaptive.hint_cache import HintCache
 from configuration import (
     DEFAULT_PROFILE_REGISTRY,
     activate_runtime_config,

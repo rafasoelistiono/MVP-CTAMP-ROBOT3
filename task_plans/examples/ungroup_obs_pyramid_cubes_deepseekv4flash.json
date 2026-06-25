@@ -1,0 +1,51 @@
+{
+  "schema_version": "ctamp-plan/v1",
+  "task": "pyramid",
+  "scene_id": "ungroup_obs_pyramid_cubes",
+  "target_objects": ["cube1", "cube2", "cube3", "cube4", "cube5", "cube6"],
+  "goal_predicates": [
+    {"name": "at", "args": ["cube1", "row0_col0"]},
+    {"name": "at", "args": ["cube2", "row0_col1"]},
+    {"name": "at", "args": ["cube3", "row0_col2"]},
+    {"name": "at", "args": ["cube4", "row1_col0"]},
+    {"name": "at", "args": ["cube5", "row1_col1"]},
+    {"name": "at", "args": ["cube6", "row2_col0"]},
+    {"name": "on", "args": ["cube4", "cube1"]},
+    {"name": "on", "args": ["cube4", "cube2"]},
+    {"name": "on", "args": ["cube5", "cube2"]},
+    {"name": "on", "args": ["cube5", "cube3"]},
+    {"name": "on", "args": ["cube6", "cube4"]},
+    {"name": "on", "args": ["cube6", "cube5"]},
+    {"name": "clear", "args": ["cube6"]},
+    {"name": "handempty", "args": []}
+  ],
+  "slot_config": {
+    "type": "pyramid",
+    "axis": "x",
+    "row_count": 3,
+    "base_row_length": 3,
+    "spacing_m": 0.066,
+    "center_x": 0.22,
+    "base_y": -0.06,
+    "base_z": 0.833,
+    "layer_height_m": 0.066
+  },
+  "steps": [
+    {"step_id": 0, "action": "pick", "object": "cube1"},
+    {"step_id": 1, "action": "place", "object": "cube1", "slot": "row0_col0"},
+    {"step_id": 2, "action": "pick", "object": "cube2"},
+    {"step_id": 3, "action": "place", "object": "cube2", "slot": "row0_col1"},
+    {"step_id": 4, "action": "pick", "object": "cube3"},
+    {"step_id": 5, "action": "place", "object": "cube3", "slot": "row0_col2"},
+    {"step_id": 6, "action": "pick", "object": "cube4"},
+    {"step_id": 7, "action": "place", "object": "cube4", "slot": "row1_col0"},
+    {"step_id": 8, "action": "pick", "object": "cube5"},
+    {"step_id": 9, "action": "place", "object": "cube5", "slot": "row1_col1"},
+    {"step_id": 10, "action": "pick", "object": "cube6"},
+    {"step_id": 11, "action": "place", "object": "cube6", "slot": "row2_col0"}
+  ],
+  "constraints": {
+    "preserve_obstacles": true,
+    "build_order": ["cube1", "cube2", "cube3", "cube4", "cube5", "cube6"]
+  }
+}

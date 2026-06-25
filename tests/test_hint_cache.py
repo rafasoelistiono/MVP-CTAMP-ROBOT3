@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 
-from adaptive.hint_cache import HintCache
+from backends.adaptive.hint_cache import HintCache
 from execution.verifier import ObservedPredicateVerifier
 
 
