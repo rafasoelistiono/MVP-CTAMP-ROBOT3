@@ -18,31 +18,11 @@ def allocate_slots(
 ) -> dict[str, tuple[float, float, float]]:
     if n <= 0:
         raise SlotAllocationError("slot count must be positive")
-    if config.type == "line":
-        return _allocate_line(config, n)
     if config.type == "tower":
         return _allocate_tower(config, n)
     if config.type == "pyramid":
         return resolve_pyramid_slots(config, tuple(f"cube{index + 1}" for index in range(n)))
     raise SlotAllocationError(f"unknown slot type: {config.type}")
-
-
-def _allocate_line(
-    config: SlotConfig,
-    n: int,
-) -> dict[str, tuple[float, float, float]]:
-    if config.axis != "x":
-        raise SlotAllocationError("only line axis 'x' is currently supported")
-    total_width = (n - 1) * config.spacing_m
-    start_x = config.center_x - total_width / 2.0
-    return {
-        f"slot_{index}": (
-            start_x + index * config.spacing_m,
-            config.row_y,
-            config.base_z,
-        )
-        for index in range(n)
-    }
 
 
 def _allocate_tower(

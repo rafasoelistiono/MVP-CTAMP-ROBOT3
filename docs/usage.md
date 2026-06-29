@@ -52,16 +52,16 @@ LLM_API_KEY=...
 Kemudian:
 
 ```bash
-python -m cli.generate_plan --context contexts/examples/ungroup_obs_align_cubes.md --task align --output task_plans/generated
+python -m cli.generate_plan --context contexts/examples/ungroup_obs_stack_cubes.md --task stack --output task_plans/generated
 ```
 
 Untuk development tanpa network gunakan response file:
 
 ```bash
 python -m cli.generate_plan \
-  --context contexts/examples/ungroup_obs_align_cubes.md \
-  --task align \
-  --response-file task_plans/examples/ungroup_obs_align_cubes.json \
+  --context contexts/examples/ungroup_obs_stack_cubes.md \
+  --task stack \
+  --response-file task_plans/examples/ungroup_obs_stack_cubes.json \
   --output task_plans/generated
 ```
 
@@ -104,15 +104,12 @@ baru benar-benar diperlukan, lalu override nilainya melalui TOML.
 
 ```bash
 python -m cli.run_simulation \
-  --plan task_plans/examples/ungroup_obs_align_cubes.json \
-  --context contexts/examples/ungroup_obs_align_cubes.md \
+  --plan task_plans/examples/ungroup_obs_stack_cubes.json \
+  --context contexts/examples/ungroup_obs_stack_cubes.md \
   --scene ungroup_obs \
   --runtime-profile obstacle \
   --viewer
 ```
-
-Untuk tower, ganti plan dan context dengan pasangan
-`ungroup_obs_stack_cubes`. Backend tidak memanggil LLM.
 
 Untuk stacked pyramid, gunakan hasil generated dari command sebelumnya:
 

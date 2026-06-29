@@ -6,11 +6,15 @@ from plugins.registry import DEFAULT_REGISTRY, PluginRegistry
 from configuration import load_runtime_config
 
 
-def test_default_registry_contains_align_stack_and_pyramid():
-    assert DEFAULT_REGISTRY.names() == ("align", "pyramid", "stack")
-    assert DEFAULT_REGISTRY.get("align").name == "align"
+def test_default_registry_contains_stack_and_pyramid():
+    assert DEFAULT_REGISTRY.names() == ("pyramid", "stack")
     assert DEFAULT_REGISTRY.get("pyramid").name == "pyramid"
     assert DEFAULT_REGISTRY.get("stack").name == "stack"
+
+
+def test_align_task_is_rejected():
+    with pytest.raises(ValueError, match="tidak terdaftar"):
+        DEFAULT_REGISTRY.get("align")
 
 
 def test_unknown_task_error_is_descriptive():

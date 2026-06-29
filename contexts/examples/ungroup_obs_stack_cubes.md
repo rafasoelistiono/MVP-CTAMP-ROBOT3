@@ -85,7 +85,7 @@
 ## constraints
 - preserve_obstacles: true
 - max_retries_per_object: 3
-- allowed_predicates: [at, on, clear, handempty, holding, aligned-row]
+- allowed_predicates: [at, on, clear, handempty, holding]
 
 ## task_plan_contract
 - schema_version: ctamp-plan/v1

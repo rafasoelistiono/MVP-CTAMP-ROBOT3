@@ -26,7 +26,6 @@ BASE_MODELS: tuple[tuple[str, str], ...] = (
     ("gpt55", "GPT-5.5"),
 )
 TASK_MODELS: dict[str, tuple[tuple[str, str], ...]] = {
-    "align": BASE_MODELS,
     "stack": BASE_MODELS,
     "pyramid": (
         ("deepseekv4flash", "DeepSeek\nV4 Flash"),
@@ -116,20 +115,12 @@ def _geometry_errors_mm(
 ) -> dict[str, float]:
     actual = plan["slot_config"]
     expected = reference["slot_config"]
-    if task == "align":
+    if task == "pyramid":
         return {
             "spacing": 1000.0 * abs(float(actual["spacing_m"]) - float(expected["spacing_m"])),
             "base Z": 1000.0 * abs(float(actual["base_z"]) - float(expected["base_z"])),
         }
     return {
-        **(
-            {
-                "spacing": 1000.0
-                * abs(float(actual["spacing_m"]) - float(expected["spacing_m"]))
-            }
-            if task == "pyramid"
-            else {}
-        ),
         "base Z": 1000.0 * abs(float(actual["base_z"]) - float(expected["base_z"])),
         "layer height": 1000.0
         * abs(float(actual["layer_height_m"]) - float(expected["layer_height_m"])),
@@ -274,8 +265,7 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
         fontweight="bold",
     )
 
-    # Execution progress: the summary counter and physically verified placements
-    # are intentionally shown side-by-side because they diverge in the align runs.
+    # Execution progress: the summary counter and physically verified placements.
     axis = axes[0, 0]
     width = 0.34
     completion = [item.completion_percent for item in metrics]
@@ -393,13 +383,7 @@ def plot_task(metrics: list[RunMetrics], task: str, output_path: Path) -> None:
     )
     axis.set_ylim(0, max(5.0, maximum_geometry * 1.28))
 
-    if task == "align":
-        missing = ", ".join(
-            f"{item.model_name.replace(chr(10), ' ')}={item.missing_place_target_attempts}"
-            for item in metrics
-        )
-        note = f"missing_place_target attempts: {missing}"
-    elif task == "stack":
+    if task == "stack":
         rebuilds = ", ".join(
             f"{item.model_name.replace(chr(10), ' ')}={item.stack_rebuilds}"
             for item in metrics
@@ -455,7 +439,7 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
     output_dir = (args.output_dir or repo_root / "docs" / "images").resolve()
 
-    for task in ("align", "stack", "pyramid"):
+    for task in ("stack", "pyramid"):
         try:
             metrics = collect_task_metrics(repo_root, task)
         except FileNotFoundError as exc:

@@ -8,13 +8,11 @@ Dokumen ini menjelaskan file source yang dipertahankan setelah cleanup.
 |---|---|
 | `pyproject.toml` | Metadata package, dependencies, pytest config, dan CLI entrypoints. |
 | `.env.example` | Template credential/endpoint LLM; tidak berisi robot tuning. |
-| `contexts/examples/ungroup_obs_align_cubes.md` | Context ungrouped obstacle untuk align empat cube. |
 | `contexts/examples/ungroup_obs_stack_cubes.md` | Context ungrouped obstacle untuk stack empat cube. |
 | `configuration/profiles/models/panda.toml` | Model XML dan reference joint/pose Franka Panda. |
 | `configuration/profiles/runtime/conservative.toml` | Fine-tuning normal tanpa obstacle. |
 | `configuration/profiles/runtime/obstacle.toml` | Fine-tuning scene obstacle. |
 | `configuration/profiles/runtime/verification_strict.toml` | Contoh verifier tolerance yang lebih ketat. |
-| `task_plans/examples/ungroup_obs_align_cubes.json` | TaskPlan align obstacle siap dijalankan. |
 | `task_plans/examples/ungroup_obs_stack_cubes.json` | TaskPlan stack obstacle siap dijalankan. |
 | `models/panda.xml` | Base MuJoCo model; generated scene dibuat dari file ini. |
 | `assets/` | Mesh visual dan collision yang direferensikan `panda.xml`. |
@@ -61,7 +59,6 @@ Dokumen ini menjelaskan file source yang dipertahankan setelah cleanup.
 |---|---|
 | `plugins/protocol.py` | `TaskPlugin` structural contract. |
 | `plugins/registry.py` | Deterministic trusted package discovery dan API-version validation. |
-| `plugins/align_task.py` | Align-specific validation, config hook, dan final row verification. |
 | `plugins/stack_task.py` | Stack dependencies, HOME ready-pose policy, dan tower verification. |
 
 ## Execution
@@ -99,7 +96,7 @@ Dokumen ini menjelaskan file source yang dipertahankan setelah cleanup.
 |---|---|
 | `tests/test_plan_validator.py` | Empat plan gates dan strict schema. |
 | `tests/test_world_builder.py` | Required context, obstacle/no-obstacle, computed reachability. |
-| `tests/test_slot_allocator.py` | Exact align/stack targets. |
+| `tests/test_slot_allocator.py` | Exact stack/pyramid targets. |
 | `tests/test_scene_manager.py` | Scene aliases, XML variants, long obstacle, summary provenance. |
 | `tests/test_runtime_config.py` | Profiles, TOML strictness, no tuning from env, registry. |
 | `tests/test_registry.py` | Plugin discovery/API and stack-specific config hook. |
@@ -108,5 +105,5 @@ Dokumen ini menjelaskan file source yang dipertahankan setelah cleanup.
 | `tests/test_recovery.py` | Retry bounds dan fatal obstacle policy. |
 | `tests/test_run_manifest.py` | Hashes dan full resolved config provenance. |
 | `tests/test_ik_diagnostics.py` | Low-level error classification/ranking. |
-| `tests/integration/test_task_runner.py` | Generic align dan stack flow dengan fake backend. |
+| `tests/integration/test_task_runner.py` | Generic stack flow dengan fake backend. |
 | `tests/integration/test_simulation_examples.py` | Dua obstacle examples dan injected stack-fall suffix rebuild. |

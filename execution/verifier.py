@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from configuration import VerificationConfig
 
@@ -22,7 +22,6 @@ class ObservedPredicateVerifier:
         "on_xy_m": 0.045,
         "on_z_m": 0.035,
         "pick_z_m": 0.90,
-        "row_y_spread_m": 0.045,
     }
 
     def __init__(
@@ -41,7 +40,6 @@ class ObservedPredicateVerifier:
             "on_xy_m": configured.on_xy_m,
             "on_z_m": configured.on_z_m,
             "pick_z_m": configured.pick_z_m,
-            "row_y_spread_m": configured.row_y_spread_m,
             "stack_max_tilt_rad": configured.stack_max_tilt_rad,
             "stack_max_linear_velocity_mps": configured.stack_max_linear_velocity_mps,
             "stack_max_angular_velocity_radps": configured.stack_max_angular_velocity_radps,
@@ -143,12 +141,6 @@ class ObservedPredicateVerifier:
             and self.provider.object_pose(obj_id)[2] > self.tolerances["pick_z_m"]
         )
 
-    def check_aligned_row(self, object_ids: Sequence[str]) -> bool:
-        if not object_ids:
-            return False
-        y_values = [self.provider.object_pose(object_id)[1] for object_id in object_ids]
-        return max(y_values) - min(y_values) <= self.tolerances["row_y_spread_m"]
-
     def evaluate(
         self,
         predicate: dict,
@@ -167,6 +159,4 @@ class ObservedPredicateVerifier:
             return self.check_handempty()
         if name == "holding" and len(args) == 1:
             return self.check_holding(args[0])
-        if name == "aligned-row" and args:
-            return self.check_aligned_row(args)
         return False

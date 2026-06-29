@@ -107,7 +107,6 @@ class VerificationConfig:
     on_xy_m: float = 0.045
     on_z_m: float = 0.035
     pick_z_m: float = 0.90
-    row_y_spread_m: float = 0.045
     stack_max_tilt_rad: float = 0.35
     stack_max_linear_velocity_mps: float = 0.02
     stack_max_angular_velocity_radps: float = 0.20
@@ -205,7 +204,6 @@ class RuntimeConfig:
             self.verification.on_xy_m,
             self.verification.on_z_m,
             self.verification.pick_z_m,
-            self.verification.row_y_spread_m,
             self.verification.stack_max_tilt_rad,
             self.verification.stack_max_linear_velocity_mps,
             self.verification.stack_max_angular_velocity_radps,

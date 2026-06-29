@@ -60,7 +60,7 @@ def make_world(objects, *, task, target_objects):
         preserve_obstacles=True,
         max_retries_per_object=1,
         allowed_predicates=(
-            "at", "on", "clear", "handempty", "holding", "aligned-row"
+            "at", "on", "clear", "handempty", "holding"
         ),
     )
 
@@ -82,30 +82,6 @@ def run_plan(tmp_path, payload, world):
         primitives,
     )
     return runner.run(), primitives
-
-
-def test_align_one_object_end_to_end_without_mujoco(tmp_path):
-    world = make_world(
-        [ObjectState("cube1", "cube", (0.10, -0.30, 0.83), True, False)],
-        task="align",
-        target_objects=["cube1"],
-    )
-    payload = {
-        "schema_version": "ctamp-plan/v1",
-        "task": "align",
-        "scene_id": "unit_scene",
-        "target_objects": ["cube1"],
-        "goal_predicates": [{"name": "at", "args": ["cube1", "slot_0"]}],
-        "slot_config": {"type": "line", "center_x": 0.22, "row_y": -0.06},
-        "steps": [
-            {"step_id": 0, "action": "pick", "object": "cube1"},
-            {"step_id": 1, "action": "place", "object": "cube1", "slot": "slot_0"},
-        ],
-    }
-    result, primitives = run_plan(tmp_path, payload, world)
-    assert result.success
-    assert result.moved_count == 1
-    assert primitives.object_pose("cube1") == (0.22, -0.06, 0.83)
 
 
 def test_stack_two_cubes_uses_live_support_pose(tmp_path):

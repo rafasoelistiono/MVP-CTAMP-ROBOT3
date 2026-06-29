@@ -64,7 +64,6 @@ def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
             "type",
             "axis",
             "spacing_m",
-            "row_y",
             "row_spacing_m",
             "row_count",
             "base_row_length",
@@ -83,7 +82,6 @@ def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
         type=slot_type,  # type: ignore[arg-type]
         axis=str(slot_raw.get("axis", "x")),
         spacing_m=float(slot_raw.get("spacing_m", 0.125)),
-        row_y=float(slot_raw.get("row_y", -0.06)),
         row_spacing_m=float(slot_raw.get("row_spacing_m", 0.08)),
         row_count=int(slot_raw.get("row_count", 0)),
         base_row_length=int(slot_raw.get("base_row_length", 0)),

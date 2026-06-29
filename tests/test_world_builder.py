@@ -49,14 +49,14 @@ def context_text(variant: str = "group_obs", include_obstacles: bool = True) -> 
 
 {obstacle_block}
 ## task
-- name: align
+- name: stack
 - target_objects: [cube1]
-- description: align cube
+- description: stack cube
 
 ## constraints
 - preserve_obstacles: true
 - max_retries_per_object: 3
-- allowed_predicates: [at, on, clear, handempty, holding, aligned-row]
+- allowed_predicates: [at, on, clear, handempty, holding]
 """
 
 

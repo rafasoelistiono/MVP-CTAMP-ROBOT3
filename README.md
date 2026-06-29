@@ -16,7 +16,7 @@ flowchart TD
     G --> H[Schema dan field validation]
     H --> I[Object, action, dan predicate whitelist]
     I --> J[Logical action-sequence validation]
-    J --> K[Task plugin validation<br/>align, stack, atau plugin baru]
+    J --> K[Task plugin validation<br/>stack, pyramid, atau plugin baru]
     K --> L{Plan valid?}
     L -->|Tidak| X[Stop sebelum MuJoCo dimuat]
 
@@ -59,7 +59,7 @@ flowchart TD
 ## Benchmark TaskPlan enam LLM
 
 Visualisasi berikut membandingkan DeepSeek V4 Flash, Qwen3 Coder, MiniMax M3,
-GPT-OSS, Sonnet 4.6, dan GPT-5.5 pada context `align`, `stack`, dan `pyramid`.
+GPT-OSS, Sonnet 4.6, dan GPT-5.5 pada context `stack` dan `pyramid`.
 Untuk challenge `pyramid` terbaru, run MiniMax yang tersedia adalah MiniMax
 M2.7 (`minimaxm27`). Satu data point adalah **run terbaru** untuk pasangan task
 dan model. Karena saat ini hanya satu run terbaru per pasangan yang dipilih,
@@ -67,9 +67,8 @@ hasil ini merupakan perbandingan run, bukan estimasi statistik atau rata-rata
 keberhasilan model.
 
 TaskPlan pembanding adalah
-`task_plans/examples/ungroup_obs_align_cubes.json` dan
-`task_plans/examples/ungroup_obs_stack_cubes.json`, serta
-`task_plans/examples/ungroup_obs_pyramid_cubes.json`. Arti metrik pada ketiga
+`task_plans/examples/ungroup_obs_stack_cubes.json` dan
+`task_plans/examples/ungroup_obs_pyramid_cubes.json`. Arti metrik pada kedua
 gambar:
 
 - **Summary completion**: nilai `completion_percent` yang ditulis summary CSV.
@@ -89,62 +88,6 @@ gambar:
   kesalahan fisik, karena backend masih melakukan geometric binding dari state
   MuJoCo.
 - **Runtime**: `duration_ms` summary yang dikonversi ke detik.
-
-### Align
-
-![Perbandingan performa dan goal state align enam LLM](docs/images/llm_align_benchmark.png)
-
-Cara membaca visualisasi `align`:
-
-- **Execution progress** membandingkan `summary completion` dari CSV dengan
-  `verified placements` dari event aktual. Panel ini dipakai untuk mengecek
-  apakah angka ringkasan benar-benar berarti cube sudah masuk slot. Insight
-  utama: Sonnet 4.6 konsisten 100% pada summary dan verified placement, GPT-5.5
-  punya summary 100% tetapi hanya 75% placement terverifikasi, sedangkan Qwen3
-  Coder, MiniMax M3, dan GPT-OSS menunjukkan summary 50% walaupun tidak ada
-  placement valid.
-- **Runtime and failed STEP attempts** membandingkan lama eksekusi dengan jumlah
-  attempt step yang gagal. Panel ini tidak mencari model tercepat saja, tetapi
-  membedakan run cepat karena berhasil efisien atau cepat karena gagal awal.
-  Insight utama: Qwen3 Coder, MiniMax M3, dan GPT-OSS terlihat cepat karena
-  banyak gagal `missing_place_target`; Sonnet 4.6 lebih lama karena benar-benar
-  menyelesaikan seluruh sequence 4 cube.
-- **Goal state and TaskPlan fidelity** membandingkan empat hal: final goal,
-  step asli yang berhasil, kecocokan struktur action, dan kecocokan predicate
-  terhadap reference plan. Panel ini memisahkan kualitas simbolik JSON dari
-  hasil fisik simulasi. Insight utama: GPT-5.5 punya struktur dan predicate
-  100%, tetapi final goal tetap gagal; artinya JSON secara simbolik benar belum
-  cukup jika observed verifier tidak melihat goal akhir.
-- **Slot geometry deviation** membandingkan jarak parameter geometri plan dari
-  reference plan, khusus `align` pada `spacing_m` dan `base_z`. Panel ini
-  menunjukkan seberapa berbeda posisi target yang diminta LLM. Insight utama:
-  Sonnet 4.6 hanya berbeda 6 mm pada spacing dan tetap feasible, sedangkan
-  variasi spacing yang lebih besar pada model lain berkorelasi dengan placement
-  yang lebih rentan gagal atau tidak tervalidasi.
-
-| Model | Summary | Placement terverifikasi | Final goal | Runtime | Failed attempt | Planned OK | Struktur plan |
-|---|---:|---:|:---:|---:|---:|---:|---:|
-| DeepSeek V4 Flash | 50% | 50% (2/4) | gagal | 67.119 s | 5 | 50% | 100% |
-| Qwen3 Coder | 50% | 0% (0/4) | gagal | 37.162 s | 13 | 25% | 50% |
-| MiniMax M3 | 50% | 0% (0/4) | gagal | 34.834 s | 13 | 25% | 50% |
-| GPT-OSS | 50% | 0% (0/4) | gagal | 33.841 s | 13 | 25% | 50% |
-| Sonnet 4.6 | 100% | 100% (4/4) | berhasil | 115.775 s | 1 | 100% | 100% |
-| GPT-5.5 | 100% | 75% (3/4) | gagal | 98.116 s | 2 | 88% | 100% |
-
-Sonnet 4.6 menjadi satu-satunya run `align` yang mencapai final goal 4/4.
-Struktur TaskPlan dan predicate-nya cocok 100%, semua slot memakai format
-`slot_0` sampai `slot_3`, dan spacing yang dipilih masih berada dalam jangkauan
-robot. GPT-5.5 juga memiliki struktur plan 100%, tetapi final verifier tetap
-gagal: satu `place` cube2 tidak menghasilkan expected effect yang teramati, lalu
-run berakhir dengan `final_goal_not_observed`. Karena itu summary 100% pada
-GPT-5.5 tidak sama dengan final goal berhasil.
-
-DeepSeek memakai nama slot yang benar dan berhasil menempatkan dua cube, tetapi
-berhenti sebelum final goal. Qwen3 Coder, MiniMax M3, dan GPT-OSS memakai
-`slot0` sampai `slot3` pada steps; masing-masing menghasilkan delapan attempt
-`missing_place_target` dan tidak memiliki placement valid. Runtime yang lebih
-pendek pada tiga run tersebut bukan performa lebih baik, melainkan run gagal
-lebih awal.
 
 ### Stack
 
@@ -438,7 +381,6 @@ Kontribusi file:
 
 - `task_planning/validator.py`: gate schema, object whitelist, predicate
   whitelist, dan sequence logic.
-- `plugins/align_task.py`: aturan khusus align.
 - `plugins/stack_task.py`: aturan tower, dependency `stack_place`, dan rebuild
   semantics.
 - `plugins/pyramid_task.py`: aturan build order 3-2-1, slot row/col, dan goal
@@ -515,7 +457,7 @@ if z < world.table_z_top:
 
 Kontribusi file:
 
-- `world/slot_allocator.py`: allocation untuk `line`, `tower`, dan `pyramid`.
+- `world/slot_allocator.py`: allocation untuk `tower` dan `pyramid`.
 - `configuration/types.py`: sumber tolerance dan safety config yang dipakai
   saat validasi slot.
 
@@ -810,15 +752,9 @@ Package framework berada langsung di root repository. Editable install tetap
 disarankan agar entrypoint tersedia dari directory mana pun. Python minimum
 adalah 3.10.
 
-Validasi tiga plan obstacle tanpa memanggil LLM:
+Validasi dua plan obstacle tanpa memanggil LLM:
 
 ```bash
-python -m cli.generate_plan \
-  --context contexts/examples/ungroup_obs_align_cubes.md \
-  --task align \
-  --response-file task_plans/examples/ungroup_obs_align_cubes.json \
-  --output task_plans/generated
-
 python -m cli.generate_plan \
   --context contexts/examples/ungroup_obs_stack_cubes.md \
   --task stack \
@@ -832,18 +768,7 @@ python -m cli.generate_plan \
   --output task_plans/generated
 ```
 
-Ketiga file pada `task_plans/examples/` sudah merupakan TaskPlan siap eksekusi.
-Jalankan align obstacle dengan viewer:
-
-```bash
-python -m cli.run_simulation \
-  --plan task_plans/examples/ungroup_obs_align_cubes.json \
-  --context contexts/examples/ungroup_obs_align_cubes.md \
-  --scene ungroup_obs \
-  --runtime-config configuration/profiles/runtime/obstacle.toml \
-  --viewer
-```
-
+Kedua file pada `task_plans/examples/` sudah merupakan TaskPlan siap eksekusi.
 Jalankan stack obstacle dengan viewer:
 
 ```bash
@@ -886,7 +811,7 @@ MVP-CTAMP-ROBOT2/
 |   `-- profiles/
 |       |-- models/         # override model dan reference pose
 |       `-- runtime/        # profile fine-tuning TOML
-|-- contexts/examples/      # context align, stack, dan pyramid obstacle siap pakai
+|-- contexts/examples/      # context stack dan pyramid obstacle siap pakai
 |-- task_plans/examples/    # contoh artefak TaskPlan
 |-- backends/adaptive/      # hint dari event historis
 |-- backends/mujoco/        # MuJoCo, Pinocchio, OMPL, collision, trace

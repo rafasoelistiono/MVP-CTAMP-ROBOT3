@@ -22,11 +22,6 @@ from world.slot_allocator import allocate_slots, validate_slots
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = (
     (
-        "align",
-        ROOT / "contexts/examples/ungroup_obs_align_cubes.md",
-        ROOT / "task_plans/examples/ungroup_obs_align_cubes.json",
-    ),
-    (
         "stack",
         ROOT / "contexts/examples/ungroup_obs_stack_cubes.md",
         ROOT / "task_plans/examples/ungroup_obs_stack_cubes.json",
@@ -195,20 +190,6 @@ def test_obstacle_example_passes_complete_deterministic_pipeline(
     assert result.success
     assert result.moved_count == 4
     assert not result.failure_reasons
-
-
-def test_align_obstacle_scene_uses_home_as_collision_safe_ready_pose():
-    world = build_world_state(
-        ROOT / "contexts/examples/ungroup_obs_align_cubes.md"
-    )
-    plan = load_plan(ROOT / "task_plans/examples/ungroup_obs_align_cubes.json")
-    plugin = DEFAULT_REGISTRY.get("align")
-    base = load_runtime_config("obstacle")
-
-    configured = plugin.configure_runtime(plan, world, base)
-
-    assert world.obstacles
-    assert configured.model.grasp_ready_q == configured.model.home_q
 
 
 def test_stack_fall_rebuilds_only_invalid_suffix(tmp_path):

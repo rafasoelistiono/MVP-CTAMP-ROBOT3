@@ -7,16 +7,15 @@ from typing import Literal
 SCHEMA_VERSION = "ctamp-plan/v1"
 ALLOWED_ACTIONS = frozenset({"pick", "place", "stack_place"})
 ALLOWED_PREDICATES = frozenset(
-    {"at", "on", "clear", "handempty", "holding", "aligned-row"}
+    {"at", "on", "clear", "handempty", "holding"}
 )
 
 
 @dataclass(frozen=True)
 class SlotConfig:
-    type: Literal["line", "tower", "pyramid"]
+    type: Literal["tower", "pyramid"]
     axis: str = "x"
     spacing_m: float = 0.125
-    row_y: float = -0.06
     row_spacing_m: float = 0.08
     row_count: int = 0
     base_row_length: int = 0

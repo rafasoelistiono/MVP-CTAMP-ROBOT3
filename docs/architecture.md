@@ -8,7 +8,7 @@
 | Plan layer | Parsing dan empat validation gates | Mengimpor MuJoCo |
 | World/scene | Fakta world, scene XML, target slot | Menentukan hasil primitive dari klaim simbolik |
 | Task plugin | Semantik task, runtime policy khusus, final goal | Mengakses internal OMPL secara langsung |
-| TaskRunner | Dispatch step, hint, recovery, observed verification | Mengetahui algoritma internal align/stack |
+| TaskRunner | Dispatch step, hint, recovery, observed verification | Mengetahui semantik internal task/plugin |
 | MuJoCo backend | IK, collision, OMPL, trajectory, gripper | Mengubah goal TaskPlan |
 | Verifier | Menilai fakta dari live pose | Mempercayai return value primitive sebagai success |
 
