@@ -43,6 +43,7 @@ class RobustAlignTelemetry:
     candidate_count: int = 0
     ranked_costs: tuple[float, ...] = ()
     selected_candidate_id: str | None = None
+    selected_candidate_strategy: str | None = None
     failed_before_success: int = 0
     probe_planning_time: float = 0.0
     ik_failure_count: int = 0
@@ -145,6 +146,14 @@ class TaskRunner:
             candidate_count=len(candidates),
             ranked_costs=tuple(s.estimated_cost for s in ranked),
             selected_candidate_id=confirmation.selected_plan_id,
+            selected_candidate_strategy=next(
+                (
+                    scored.generation_method
+                    for scored in ranked
+                    if scored.plan_id == confirmation.selected_plan_id
+                ),
+                None,
+            ),
             failed_before_success=len(confirmation.failed_plan_ids),
             probe_planning_time=confirmation.total_planning_time,
             ik_failure_count=confirmation.total_ik_failures,

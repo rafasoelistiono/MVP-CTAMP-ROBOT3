@@ -243,7 +243,20 @@ def _initialize_available_arms() -> None:
 name_to_cube = {}
 for i in range(model.nbody):
     name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i)
-    if name and (name.startswith("cube") or name.startswith("circle")):
+    joint_count = int(model.body_jntnum[i])
+    first_joint = int(model.body_jntadr[i]) if joint_count else -1
+    is_free_body = (
+        first_joint >= 0
+        and int(model.jnt_type[first_joint]) == int(mujoco.mjtJoint.mjJNT_FREE)
+    )
+    is_obstacle = bool(
+        name
+        and any(
+            token in name.lower()
+            for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
+        )
+    )
+    if name and is_free_body and not is_obstacle:
         name_to_cube[name] = model.body(name).id
 
 # =============================
@@ -253,7 +266,10 @@ for i in range(model.nbody):
 _obstacle_ids: dict[str, int] = {}
 for _i in range(model.nbody):
     _n = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, _i)
-    if _n and any(token in _n.lower() for token in ("obstacle", "vase", "glass", "ceramic")):
+    if _n and any(
+        token in _n.lower()
+        for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
+    ):
         _obstacle_ids[_n] = model.body(_n).id
 
 _obstacle_init_z: dict[str, float] = {}
@@ -319,6 +335,117 @@ def _min_obstacle_xy_distance(pos: np.ndarray) -> float:
     for bid in _obstacle_ids.values():
         distances.append(float(np.linalg.norm(xy - data.xpos[bid][:2])))
     return min(distances) if distances else float("inf")
+
+
+def _grouped_wall_bounds() -> tuple[float, float, float, float] | None:
+    wall_names = sorted(name for name in _obstacle_ids if name.startswith("tall_obs_"))
+    if len(wall_names) != 2:
+        return None
+    bounds = []
+    mujoco.mj_forward(model, data)
+    for name in wall_names:
+        body_id = _obstacle_ids[name]
+        geom_id = int(model.body_geomadr[body_id])
+        if int(model.geom_type[geom_id]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+            return None
+        center = data.geom_xpos[geom_id]
+        size = model.geom_size[geom_id]
+        bounds.append(
+            (
+                float(center[0] - size[0]),
+                float(center[0] + size[0]),
+                float(center[1] - size[1]),
+                float(center[1] + size[1]),
+            )
+        )
+    return (
+        min(item[0] for item in bounds),
+        max(item[1] for item in bounds),
+        min(item[2] for item in bounds),
+        max(item[3] for item in bounds),
+    )
+
+
+def _grouped_wall_bypass_waypoints(
+    target_xyz: np.ndarray,
+) -> tuple[str, tuple[np.ndarray, ...]] | None:
+    bounds = _grouped_wall_bounds()
+    if bounds is None:
+        return None
+    min_x, max_x, min_y, max_y = bounds
+    current = np.asarray(_ee_xyz(), dtype=float)
+    if current[1] >= min_y or float(target_xyz[1]) <= max_y:
+        return None
+
+    side = "right"
+    side_x = min_x - 0.455 if side == "left" else max_x + 0.10
+    bypass_z = max(float(current[2]), float(target_xyz[2]), 1.10)
+    right_back_z = 1.05
+    lateral: list[np.ndarray] = [
+        np.array([float(current[0]), float(current[1]), bypass_z])
+    ]
+    x_step = 0.05 if side_x >= float(current[0]) else -0.05
+    next_x = float(current[0]) + x_step
+    while (x_step > 0 and next_x < side_x) or (x_step < 0 and next_x > side_x):
+        lateral.append(np.array([next_x, float(current[1]), bypass_z]))
+        next_x += x_step
+    lateral.append(np.array([side_x, float(current[1]), bypass_z]))
+    back_y = max_y + (0.13 if side == "right" else 0.10)
+    crossing: list[np.ndarray] = []
+    next_y = float(current[1]) + 0.09
+    if side == "left":
+        while next_y < min(0.10, back_y):
+            crossing.append(np.array([side_x, next_y, bypass_z]))
+            next_y += 0.09
+        outer_x = side_x - 0.10
+        next_y = max(0.13, next_y)
+        while next_y < min(back_y, 0.40):
+            crossing.append(np.array([outer_x, next_y, bypass_z]))
+            next_y += 0.09
+    else:
+        while next_y < back_y:
+            if 0.08 <= next_y < max_y:
+                route_x = side_x + 0.20
+            elif next_y >= max_y:
+                route_x = side_x + 0.20
+            else:
+                route_x = side_x
+            route_z = right_back_z if next_y >= max_y else bypass_z
+            crossing.append(np.array([route_x, next_y, route_z]))
+            next_y += 0.09
+    back_x = side_x - 0.10 if side == "left" else side_x + 0.20
+    back = np.array(
+        [back_x, back_y, right_back_z if side == "right" else bypass_z]
+    )
+    if side == "left":
+        target_x = float(target_xyz[0])
+        target_y = float(target_xyz[1])
+        corner_y = float(crossing[-1][1]) if crossing else float(current[1])
+        curve = (
+            np.array([back_x - 0.10, corner_y, bypass_z]),
+            np.array([back_x - 0.10, max_y + 0.05, bypass_z]),
+            np.array([side_x - 0.05, max_y + 0.10, bypass_z]),
+            np.array([target_x - 0.12, target_y - 0.05, bypass_z]),
+            np.array([target_x, target_y, bypass_z]),
+        )
+        return side, (*lateral, *crossing, *curve)
+    target_x = float(target_xyz[0])
+    target_y = float(target_xyz[1])
+    approach_x = target_x + 0.12
+    curve: list[np.ndarray] = [
+        np.array([back_x, target_y - 0.05, right_back_z]),
+    ]
+    next_x = back_x - 0.06
+    while next_x > approach_x:
+        curve.append(np.array([next_x, target_y - 0.05, right_back_z]))
+        next_x -= 0.06
+    curve.extend(
+        (
+            np.array([approach_x, target_y - 0.05, right_back_z]),
+            np.array([target_x, target_y, right_back_z]),
+        )
+    )
+    return side, (*lateral, *crossing, back, *curve)
 
 
 def _object_lifted(obj: str) -> tuple[bool, float]:
@@ -1283,6 +1410,26 @@ def _move_with_ompl(
                 )
                 continue
 
+            selected_goal_q = np.asarray(
+                info.get("selected_goal_q", goal_q), dtype=float
+            )
+            endpoint_error = float(
+                np.linalg.norm(np.asarray(traj[-1], dtype=float) - selected_goal_q)
+            )
+            if endpoint_error > 0.02:
+                _log_arm_state(
+                    "OMPL_PLAN_ATTEMPT",
+                    "FAILED",
+                    phase=label,
+                    planner=info.get("planner_name", attempt_planner),
+                    attempt=attempt_index,
+                    failure_reason="ompl_approximate_endpoint",
+                    q_target=_round_vec(selected_goal_q, 4),
+                    endpoint_q=_round_vec(traj[-1], 4),
+                    endpoint_error=round(endpoint_error, 5),
+                )
+                continue
+
             duration_ms = int((time.perf_counter() - started) * 1000)
             print(
                 f"[exec][OMPL] solved={info.get('solved')} "
@@ -1957,6 +2104,62 @@ def place(
         held_offset_from_ee=_round_vec(held_offset_from_ee, 4),
         cautious_motion=cautious_motion,
     )
+
+    bypass = _grouped_wall_bypass_waypoints(preplace_xyz)
+    if bypass is not None:
+        side, waypoints = bypass
+        _log_arm_state(
+            "WALL_BYPASS",
+            "SELECT",
+            object_id=obj,
+            phase=side,
+            target_xyz=_round_vec(place_pos, 4),
+            bypass_waypoints=[_round_vec(waypoint, 4) for waypoint in waypoints],
+        )
+        for index, waypoint in enumerate(waypoints, start=1):
+            if not _move_pose_safe(
+                waypoint,
+                grip=_held_grip_target,
+                null_ref=cube_null_ref(waypoint),
+                ignored_body_names=[obj],
+                label=f"grouped wall bypass {side} {index}",
+                cautious_motion=False,
+            ):
+                drop(obj)
+                _held_object_name = None
+                _log_arm_state(
+                    "WALL_BYPASS",
+                    "FAILED",
+                    object_id=obj,
+                    phase=f"{side}_{index}",
+                    target_xyz=_round_vec(waypoint, 4),
+                    failure_reason="wall_bypass_failed",
+                )
+                return
+            still_held, object_z = _object_lifted(obj)
+            object_xyz = np.asarray(_object_xyz(obj), dtype=float)
+            grasp_distance = float(
+                np.linalg.norm(object_xyz - np.asarray(_ee_xyz(), dtype=float))
+            )
+            if not still_held or grasp_distance > 0.18:
+                drop(obj)
+                _held_object_name = None
+                _log_arm_state(
+                    "WALL_BYPASS",
+                    "FAILED",
+                    object_id=obj,
+                    phase=f"{side}_{index}",
+                    object_z=round(object_z, 4),
+                    distance_to_target=round(grasp_distance, 4),
+                    failure_reason="object_lost_during_wall_bypass",
+                )
+                return
+        _log_arm_state(
+            "WALL_BYPASS",
+            "OK",
+            object_id=obj,
+            phase=side,
+        )
 
     # 1) Move above the goal while still holding the cube.
     if not _move_pose_safe(

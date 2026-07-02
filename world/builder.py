@@ -8,7 +8,14 @@ from typing import Any
 
 from task_planning.types import ALLOWED_ACTIONS
 
-from .state import ObstacleState, ObjectState, WorldState
+from .state import (
+    ChallengeConfig,
+    GroupedTidyConfig,
+    ObstacleState,
+    ObjectState,
+    TidyGroup,
+    WorldState,
+)
 
 
 VALID_VARIANTS = {
@@ -18,6 +25,7 @@ VALID_VARIANTS = {
     "ungroup_obs",
     "group_long_obs",
     "ungroup_long_obs",
+    "align_grouped_tidy_gang",
 }
 _SECTION_RE = re.compile(r"^##\s+([a-zA-Z0-9_-]+)\s*$")
 _FIELD_RE = re.compile(r"^\s*-\s+([a-zA-Z0-9_-]+)\s*:\s*(.*?)\s*$")
@@ -76,7 +84,9 @@ def _parse_markdown(text: str) -> dict[str, Any]:
         section_match = _SECTION_RE.match(stripped)
         if section_match:
             section = section_match.group(1).lower()
-            sections[section] = [] if section in {"objects", "obstacles"} else {}
+            sections[section] = (
+                [] if section in {"objects", "obstacles", "tidy_groups"} else {}
+            )
             current_record = None
             continue
         if section is None:
@@ -90,7 +100,7 @@ def _parse_markdown(text: str) -> dict[str, Any]:
 
         key, raw_value = match.groups()
         value = _parse_scalar(raw_value)
-        if section in {"objects", "obstacles"}:
+        if section in {"objects", "obstacles", "tidy_groups"}:
             if field_match and key == "id":
                 current_record = {"id": value}
                 sections[section].append(current_record)
@@ -144,6 +154,137 @@ def _object_rgba(raw: dict, path: str) -> tuple[float, float, float, float] | No
             f"{path}.color must be one of {sorted(palette)}"
         )
     return palette[color]
+
+
+def _parse_grouped_tidy(
+    sections: dict[str, Any],
+    targets: tuple[str, ...],
+    object_ids: set[str],
+) -> GroupedTidyConfig | None:
+    raw = sections.get("grouped_tidy")
+    if not raw or not isinstance(raw, dict):
+        return None
+    enabled = bool(raw.get("enabled", False))
+    if not enabled:
+        return None
+    require_ordered = bool(raw.get("require_ordered", False))
+    slot_prefix = str(raw.get("slot_prefix", "tidy_slot"))
+    axis = str(raw.get("axis", "x"))
+    if axis not in {"x", "y"}:
+        raise ContextValidationError(
+            f"grouped_tidy.axis must be 'x' or 'y', got {axis!r}"
+        )
+    spacing = float(raw.get("spacing", 0.085))
+    if spacing <= 0:
+        raise ContextValidationError("grouped_tidy.spacing must be positive")
+    row_spacing = float(raw.get("row_spacing", 0.105))
+    if row_spacing <= 0:
+        raise ContextValidationError("grouped_tidy.row_spacing must be positive")
+
+    group_rows = sections.get("tidy_groups", [])
+    if not group_rows:
+        raise ContextValidationError(
+            "grouped_tidy enabled but no ## tidy_groups section found"
+        )
+    groups: list[TidyGroup] = []
+    assigned_objects: set[str] = set()
+    for idx, raw_group in enumerate(group_rows):
+        required = {"id", "color", "objects", "center"}
+        missing = sorted(required - set(raw_group))
+        if missing:
+            raise ContextValidationError(
+                f"tidy_groups[{idx}] is missing fields: {', '.join(missing)}"
+            )
+        group_id = str(raw_group["id"])
+        color = str(raw_group["color"])
+        objects_raw = raw_group["objects"]
+        if not isinstance(objects_raw, list) or not objects_raw:
+            raise ContextValidationError(
+                f"tidy_groups[{idx}].objects must be a non-empty list"
+            )
+        objects = tuple(str(o) for o in objects_raw)
+        center = _tuple_numbers(raw_group["center"], 3, f"tidy_groups[{idx}].center")
+
+        unknown = sorted(set(objects) - object_ids)
+        if unknown:
+            raise ContextValidationError(
+                f"tidy_groups[{idx}] references unknown objects: "
+                + ", ".join(unknown)
+            )
+        unseen = sorted(set(objects) - set(targets))
+        if unseen:
+            raise ContextValidationError(
+                f"tidy_groups[{idx}] has objects not in target_objects: "
+                + ", ".join(unseen)
+            )
+        overlap = sorted(set(objects) & assigned_objects)
+        if overlap:
+            raise ContextValidationError(
+                f"tidy_groups[{idx}] duplicates objects already assigned: "
+                + ", ".join(overlap)
+            )
+        assigned_objects.update(objects)
+        groups.append(
+            TidyGroup(id=group_id, color=color, objects=objects, center=center)
+        )
+
+    unassigned = sorted(set(targets) - assigned_objects)
+    if unassigned:
+        raise ContextValidationError(
+            "target_objects not assigned to any tidy group: " + ", ".join(unassigned)
+        )
+    return GroupedTidyConfig(
+        enabled=enabled,
+        require_ordered=require_ordered,
+        slot_prefix=slot_prefix,
+        axis=axis,
+        spacing=spacing,
+        row_spacing=row_spacing,
+        groups=tuple(groups),
+    )
+
+
+def _parse_challenge(
+    sections: dict[str, Any],
+    obstacle_ids: set[str],
+) -> ChallengeConfig | None:
+    raw = sections.get("challenge")
+    if not raw or not isinstance(raw, dict):
+        return None
+    enabled = bool(raw.get("enabled", False))
+    if not enabled:
+        return None
+    challenge_type = str(raw.get("type", "")).strip()
+    if not challenge_type:
+        raise ContextValidationError("challenge enabled but missing type")
+    obs_ids_raw = raw.get("obstacle_ids", [])
+    if not isinstance(obs_ids_raw, list) or not obs_ids_raw:
+        raise ContextValidationError(
+            "challenge.enabled requires non-empty obstacle_ids"
+        )
+    obs_ids = tuple(str(o) for o in obs_ids_raw)
+    unknown = sorted(set(obs_ids) - obstacle_ids)
+    if unknown:
+        raise ContextValidationError(
+            "challenge.obstacle_ids references unknown obstacles: "
+            + ", ".join(unknown)
+        )
+    return ChallengeConfig(
+        type=challenge_type,
+        enabled=enabled,
+        obstacle_ids=obs_ids,
+        require_obstacle_aware_slots=bool(
+            raw.get("require_obstacle_aware_slots", False)
+        ),
+        require_motion_probe=bool(raw.get("require_motion_probe", False)),
+        compare_planners=tuple(
+            str(p) for p in raw.get("compare_planners", [])
+        ),
+        min_gap_width=float(raw.get("min_gap_width", 0.0)),
+        inflated_clearance_required=bool(
+            raw.get("inflated_clearance_required", False)
+        ),
+    )
 
 
 def build_world_state(path: str | Path) -> WorldState:
@@ -369,6 +510,9 @@ def build_world_state(path: str | Path) -> WorldState:
                 + ", ".join(non_fragile)
             )
 
+    grouped_tidy = _parse_grouped_tidy(sections, targets, object_ids)
+    challenge = _parse_challenge(sections, obstacle_ids)
+
     return WorldState(
         scene_id=scene_id,
         variant=variant,
@@ -394,4 +538,6 @@ def build_world_state(path: str | Path) -> WorldState:
         preserve_obstacles=bool(constraints["preserve_obstacles"]),
         max_retries_per_object=max_retries,
         allowed_predicates=allowed,
+        grouped_tidy=grouped_tidy,
+        challenge=challenge,
     )

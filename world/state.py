@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -11,6 +11,7 @@ SceneVariant = Literal[
     "ungroup_obs",
     "group_long_obs",
     "ungroup_long_obs",
+    "align_grouped_tidy_gang",
 ]
 
 
@@ -31,6 +32,37 @@ class ObstacleState:
     fragile: bool
     radius: float
     height: Literal["short", "long"]
+
+
+@dataclass(frozen=True)
+class TidyGroup:
+    id: str
+    color: str
+    objects: tuple[str, ...]
+    center: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class GroupedTidyConfig:
+    enabled: bool = False
+    require_ordered: bool = False
+    slot_prefix: str = "tidy_slot"
+    axis: str = "x"
+    spacing: float = 0.085
+    row_spacing: float = 0.105
+    groups: tuple[TidyGroup, ...] = ()
+
+
+@dataclass(frozen=True)
+class ChallengeConfig:
+    type: str = ""
+    enabled: bool = False
+    obstacle_ids: tuple[str, ...] = ()
+    require_obstacle_aware_slots: bool = False
+    require_motion_probe: bool = False
+    compare_planners: tuple[str, ...] = ()
+    min_gap_width: float = 0.0
+    inflated_clearance_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +87,8 @@ class WorldState:
     max_retries_per_object: int
     allowed_predicates: tuple[str, ...]
     goal_area_size_xy: tuple[float, float] = (0.52, 0.40)
+    grouped_tidy: GroupedTidyConfig | None = None
+    challenge: ChallengeConfig | None = None
 
     def object_by_id(self, oid: str) -> ObjectState | None:
         return next((obj for obj in self.objects if obj.id == oid), None)

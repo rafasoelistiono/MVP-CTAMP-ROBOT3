@@ -35,6 +35,7 @@ SCENE_ALIASES = {
     "ungroup long obs": "ungroup_long_obs",
     "ungroup_long": "ungroup_long_obs",
     "ungroup long": "ungroup_long_obs",
+    "align_grouped_tidy_gang": "align_grouped_tidy_gang",
 }
 
 GOAL_CENTER = (0.22, -0.06, 0.806)
@@ -50,6 +51,8 @@ CUBE_HALF_EXTENTS = (0.033, 0.033, 0.033)
 CUBE_CENTER_Z = 0.833
 DEFAULT_OBSTACLE_HALF_HEIGHT = 0.085
 LONG_OBSTACLE_HALF_HEIGHT = 0.32
+GROUPED_TIDY_WALL_HALF_HEIGHT = 0.50
+GROUPED_TIDY_WALL_HALF_DEPTH = 0.02
 
 VARIANT_OBJECTS = {
     "group_no_obs": {
@@ -121,6 +124,7 @@ class _SceneObject(Protocol):
 class _SceneObstacle(Protocol):
     id: str
     pose: tuple[float, float, float]
+    radius: float
     height: str
 
 
@@ -149,7 +153,7 @@ def normalize_scene_key(raw: str | Iterable[str] | None) -> str:
 def obstacle_mode_for_scene(scene_key: str) -> str:
     if scene_key.endswith("_no_obs"):
         return "no_obs"
-    if scene_key.endswith("_obs"):
+    if scene_key.endswith("_obs") or scene_key == "align_grouped_tidy_gang":
         return "obs"
     return "unknown"
 
@@ -160,9 +164,13 @@ def prepare_scene_variant(
     base_model_file: str | Path | None = None,
     object_states: Iterable[_SceneObject] | None = None,
     obstacle_states: Iterable[_SceneObstacle] | None = None,
+    goal_center: tuple[float, float, float] | None = None,
+    goal_area_size_xy: tuple[float, float] | None = None,
+    table_size_xy: tuple[float, float] | None = None,
 ) -> Path:
     scene_key = normalize_scene_key(raw)
-    _validate_variant(scene_key)
+    if object_states is None:
+        _validate_variant(scene_key)
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     base_path = Path(base_model_file) if base_model_file else MODELS_DIR / "panda.xml"
     if not base_path.is_absolute():
@@ -180,6 +188,24 @@ def prepare_scene_variant(
     if worldbody is None:
         raise RuntimeError("models/panda.xml has no worldbody")
 
+    if scene_key == "align_grouped_tidy_gang":
+        finger_actuator = root.find(
+            "./actuator/position[@joint='finger_joint1']"
+        )
+        if finger_actuator is None:
+            raise RuntimeError("base model has no finger_joint1 actuator")
+        finger_actuator.set("kp", "600")
+
+    if table_size_xy is not None:
+        table_geom = worldbody.find("./body[@name='table']/geom[@name='table_top']")
+        if table_geom is None:
+            raise RuntimeError("base model has no table_top geom")
+        old_size = table_geom.get("size", "0.6 0.8 0.05").split()
+        table_geom.set(
+            "size",
+            f"{table_size_xy[0] / 2.0} {table_size_xy[1] / 2.0} {old_size[2]}",
+        )
+
     removable_prefixes = ("cube", "circle", "obstacle", "vase", "glass", "ceramic")
     for body in list(worldbody.findall("body")):
         name = body.get("name", "")
@@ -192,7 +218,7 @@ def prepare_scene_variant(
             link0_index = idx
             break
 
-    inserts = [_goal_area_body()]
+    inserts = [_goal_area_body(goal_center, goal_area_size_xy)]
     if object_states is None:
         for object_name, pos in VARIANT_OBJECTS[scene_key].items():
             inserts.append(_movable_body(object_name, pos))
@@ -204,11 +230,22 @@ def prepare_scene_variant(
                     state.pose,
                     cls=state.cls,
                     rgba_override=getattr(state, "rgba", None),
+                    cube_friction=(
+                        "3 1.5 0.8"
+                        if scene_key == "align_grouped_tidy_gang"
+                        else None
+                    ),
+                    cube_mass=(
+                        0.06 if scene_key == "align_grouped_tidy_gang" else None
+                    ),
                 )
             )
 
     if obstacle_mode_for_scene(scene_key) == "obs":
-        fixed = scene_key.endswith("_long_obs")
+        fixed = (
+            scene_key.endswith("_long_obs")
+            or scene_key == "align_grouped_tidy_gang"
+        )
         if obstacle_states is None:
             half_height = _obstacle_half_height_for_scene(scene_key)
             for obstacle_name, pos in _obstacle_positions_for_scene(scene_key).items():
@@ -216,12 +253,27 @@ def prepare_scene_variant(
         else:
             for state in obstacle_states:
                 half_height = (
-                    LONG_OBSTACLE_HALF_HEIGHT
-                    if state.height == "long"
-                    else DEFAULT_OBSTACLE_HALF_HEIGHT
+                    GROUPED_TIDY_WALL_HALF_HEIGHT
+                    if scene_key == "align_grouped_tidy_gang"
+                    else (
+                        LONG_OBSTACLE_HALF_HEIGHT
+                        if state.height == "long"
+                        else DEFAULT_OBSTACLE_HALF_HEIGHT
+                    )
                 )
                 inserts.append(
-                    _obstacle_body(state.id, state.pose, half_height=half_height, fixed=fixed)
+                    _obstacle_body(
+                        state.id,
+                        state.pose,
+                        radius=(
+                            state.radius
+                            if scene_key == "align_grouped_tidy_gang"
+                            else 0.035
+                        ),
+                        half_height=half_height,
+                        fixed=fixed,
+                        wall=scene_key == "align_grouped_tidy_gang",
+                    )
                 )
 
     for offset, body in enumerate(inserts):
@@ -290,13 +342,20 @@ def _inside_goal_area(x: float, y: float) -> bool:
     )
 
 
-def _goal_area_body() -> ET.Element:
+def _goal_area_body(
+    center: tuple[float, float, float] | None = None,
+    size_xy: tuple[float, float] | None = None,
+) -> ET.Element:
+    center_x, center_y = (center or GOAL_CENTER)[:2]
+    size_x, size_y = size_xy or (GOAL_HALF_SIZE_X * 2.0, GOAL_HALF_SIZE_Y * 2.0)
+    half_x = size_x / 2.0
+    half_y = size_y / 2.0
     return ET.fromstring(
-        """
-        <body name="goal_area" pos="0.22 -0.06 0.806">
-          <geom name="goal_area_base" type="box" size="0.26 0.20 0.003" rgba="0.05 0.35 0.95 0.22" contype="0" conaffinity="0"/>
-          <geom name="goal_square_row" type="box" size="0.24 0.025 0.004" pos="0 -0.065 0.004" rgba="0.95 0.25 0.15 0.35" contype="0" conaffinity="0"/>
-          <geom name="goal_circle_row" type="box" size="0.24 0.025 0.004" pos="0 0.065 0.004" rgba="0.1 0.8 0.45 0.35" contype="0" conaffinity="0"/>
+        f"""
+        <body name="goal_area" pos="{center_x} {center_y} 0.806">
+          <geom name="goal_area_base" type="box" size="{half_x} {half_y} 0.003" rgba="0.05 0.35 0.95 0.22" contype="0" conaffinity="0"/>
+          <geom name="goal_left_zone" type="box" size="{half_x / 2.0 - 0.01} {half_y - 0.01} 0.004" pos="{-half_x / 2.0} 0 0.004" rgba="0.20 0.75 0.35 0.25" contype="0" conaffinity="0"/>
+          <geom name="goal_right_zone" type="box" size="{half_x / 2.0 - 0.01} {half_y - 0.01} 0.004" pos="{half_x / 2.0} 0 0.004" rgba="0.25 0.45 0.95 0.25" contype="0" conaffinity="0"/>
         </body>
         """
     )
@@ -308,6 +367,8 @@ def _movable_body(
     *,
     cls: str | None = None,
     rgba_override: tuple[float, float, float, float] | None = None,
+    cube_friction: str | None = None,
+    cube_mass: float | None = None,
 ) -> ET.Element:
     rgba = " ".join(str(value) for value in rgba_override) if rgba_override else {
         "cube1": "1 0 0 1",
@@ -328,7 +389,9 @@ def _movable_body(
     object_class = cls or ("cube" if name.startswith("cube") else "cylinder")
     if object_class == "cube":
         half_x, half_y, half_z = CUBE_HALF_EXTENTS
-        geom = f'<geom type="box" size="{half_x} {half_y} {half_z}" mass="0.1" friction="2 1 0.5" contype="1" conaffinity="1" rgba="{rgba}"/>'
+        friction = cube_friction or "2 1 0.5"
+        mass = cube_mass or 0.1
+        geom = f'<geom type="box" size="{half_x} {half_y} {half_z}" mass="{mass}" friction="{friction}" contype="1" conaffinity="1" rgba="{rgba}"/>'
     else:
         radius, half_height = COMPACT_CYLINDER_SIZE
         geom = f'<geom type="cylinder" size="{radius} {half_height}" mass="0.08" friction="3 1.5 0.8" contype="1" conaffinity="1" rgba="{rgba}"/>'
@@ -345,15 +408,29 @@ def _movable_body(
 def _obstacle_body(
     name: str,
     pos: tuple[float, float, float],
+    radius: float = 0.035,
     half_height: float = DEFAULT_OBSTACLE_HALF_HEIGHT,
     fixed: bool = False,
+    wall: bool = False,
 ) -> ET.Element:
     joint = "" if fixed else '<joint type="free"/>'
+    if wall:
+        geom = (
+            f'<geom type="box" size="{radius} {GROUPED_TIDY_WALL_HALF_DEPTH} '
+            f'{half_height}" mass="2.0" friction="2 1 0.5" '
+            'rgba="0.35 0.35 0.40 0.92" contype="1" conaffinity="1"/>'
+        )
+    else:
+        geom = (
+            f'<geom type="cylinder" size="{radius} {half_height}" mass="0.4" '
+            'friction="2 1 0.5" rgba="0.9 0.75 0.2 0.75" '
+            'contype="1" conaffinity="1"/>'
+        )
     return ET.fromstring(
         f"""
         <body name="{name}" pos="{pos[0]} {pos[1]} {pos[2]}">
           {joint}
-          <geom type="cylinder" size="0.035 {half_height}" mass="0.4" friction="2 1 0.5" rgba="0.9 0.75 0.2 0.75" contype="1" conaffinity="1"/>
+          {geom}
         </body>
         """
     )

@@ -239,3 +239,32 @@ def _gate_4_action_sequence(plan: TaskPlan) -> None:
             "gate 4: target objects are not placed by the plan: "
             + ", ".join(not_placed)
         )
+
+
+def validate_grouped_align_order(
+    plan: TaskPlan,
+    slot_prefix: str,
+    groups: tuple,
+) -> None:
+    """Validate object-to-slot assignment for grouped tidy align plans.
+
+    groups is a tuple of TidyGroup-like objects with .id, .objects attributes.
+    """
+    expected_slot: dict[str, str] = {}
+    for group in groups:
+        for i, obj_id in enumerate(group.objects):
+            expected_slot[obj_id] = f"{slot_prefix}_{group.id}_{i}"
+
+    for step in plan.steps:
+        if step.action != "place" or not step.slot:
+            continue
+        obj_id = step.object
+        if obj_id not in expected_slot:
+            raise PlanValidationError(
+                f"grouped align: object {obj_id!r} is not assigned to any tidy group"
+            )
+        if step.slot != expected_slot[obj_id]:
+            raise PlanValidationError(
+                f"grouped align: object {obj_id!r} must go to slot "
+                f"{expected_slot[obj_id]!r}, got {step.slot!r}"
+            )

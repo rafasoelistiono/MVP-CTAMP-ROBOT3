@@ -4,7 +4,8 @@ from dataclasses import replace
 
 from configuration import RuntimeConfig
 from task_planning.types import SlotConfig, TaskPlan
-from task_planning.validator import PlanValidationError
+from task_planning.validator import PlanValidationError, validate_grouped_align_order
+from world.slot_allocator import allocate_grouped_align_slots
 from world.state import WorldState
 
 from .protocol import TaskProgress
@@ -105,11 +106,49 @@ class AlignTaskPlugin:
                 "align plan does not pick all target objects: " + ", ".join(not_picked)
             )
 
+        # --- grouped tidy variant checks ---
+        gt = world.grouped_tidy
+        if gt and gt.enabled:
+            if plan.target_objects != world.target_objects:
+                raise PlanValidationError(
+                    "grouped tidy plan target_objects must match context targets"
+                )
+            assigned_objects = set()
+            for group in gt.groups:
+                for obj in group.objects:
+                    if obj in assigned_objects:
+                        raise PlanValidationError(
+                            f"object {obj!r} assigned to multiple tidy groups"
+                        )
+                    assigned_objects.add(obj)
+            unassigned = sorted(set(world.target_objects) - assigned_objects)
+            if unassigned:
+                raise PlanValidationError(
+                    "target_objects missing from tidy groups: " + ", ".join(unassigned)
+                )
+            for step in plan.steps:
+                if step.slot and not step.slot.startswith(gt.slot_prefix):
+                    raise PlanValidationError(
+                        f"slot {step.slot!r} does not start with tidy prefix {gt.slot_prefix!r}"
+                    )
+            validate_grouped_align_order(plan, gt.slot_prefix, gt.groups)
+
     def make_slot_config(
         self,
         plan: TaskPlan,
         world: WorldState,
     ) -> SlotConfig:
+        gt = world.grouped_tidy
+        if gt and gt.enabled:
+            slots = allocate_grouped_align_slots(world, gt)
+            return SlotConfig(
+                type="line",
+                axis=gt.axis,
+                spacing_m=gt.spacing,
+                center_x=world.goal_center[0],
+                row_y=world.goal_center[1],
+                base_z=world.table_z_top + 0.033,
+            )
         return plan.slot_config
 
     def configure_runtime(
@@ -118,6 +157,24 @@ class AlignTaskPlugin:
         world: WorldState,
         config: RuntimeConfig,
     ) -> RuntimeConfig:
+        gt = world.grouped_tidy
+        if gt and gt.enabled:
+            return replace(
+                config,
+                model=replace(config.model, grasp_ready_q=config.model.home_q),
+                motion=replace(
+                    config.motion,
+                    time_limit_s=20.0,
+                    waypoint_step=0.010,
+                    settle_steps_per_waypoint=10,
+                    final_settle_steps=20,
+                ),
+                grasp=replace(
+                    config.grasp,
+                    approach_clearance_m=0.24,
+                    pick_grip_sequence=(0.024, 0.023, 0.022),
+                ),
+            ).validate()
         if world.obstacles:
             return replace(
                 config,
@@ -158,6 +215,19 @@ class AlignTaskPlugin:
             return False
         if not verifier.check_handempty():
             return False
+        gt = world.grouped_tidy
+        if gt and gt.enabled:
+            for group in gt.groups:
+                if not verifier.verify_group_row_alignment(
+                    group.objects, gt.axis
+                ):
+                    return False
+                if not verifier.verify_group_spacing(
+                    group.objects, gt.spacing, gt.axis
+                ):
+                    return False
+            if not verifier.verify_no_grouped_slot_overlap(slots, gt):
+                return False
         return True
 
 

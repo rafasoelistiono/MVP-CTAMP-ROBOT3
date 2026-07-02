@@ -187,8 +187,15 @@ class CollisionPolicy:
             return False
 
     def _is_movable_object(self, body_name: str) -> bool:
-        lower = body_name.lower()
-        return lower.startswith(("cube", "circle")) and not self._is_obstacle(lower)
+        if self._is_obstacle(body_name) or not self._has_body(body_name):
+            return False
+        body_id = self.model.body(body_name).id
+        if int(self.model.body_jntnum[body_id]) <= 0:
+            return False
+        joint_id = int(self.model.body_jntadr[body_id])
+        return int(self.model.jnt_type[joint_id]) == int(
+            mujoco.mjtJoint.mjJNT_FREE
+        )
 
     def _is_finger_body(self, body_name: Optional[str]) -> bool:
         return bool(body_name) and str(body_name).endswith(("left_finger", "right_finger"))
@@ -198,4 +205,7 @@ class CollisionPolicy:
 
     def _is_obstacle(self, body_name: str) -> bool:
         lower = body_name.lower()
-        return any(token in lower for token in ("obstacle", "vase", "glass", "ceramic"))
+        return any(
+            token in lower
+            for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
+        )

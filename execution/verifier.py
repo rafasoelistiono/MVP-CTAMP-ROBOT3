@@ -141,6 +141,81 @@ class ObservedPredicateVerifier:
             and self.provider.object_pose(obj_id)[2] > self.tolerances["pick_z_m"]
         )
 
+    def verify_group_row_alignment(
+        self,
+        object_ids: tuple[str, ...],
+        axis: str,
+        tolerance_m: float | None = None,
+    ) -> bool:
+        """Check that objects are aligned in a row along the given axis."""
+        if len(object_ids) < 2:
+            return True
+        tol = tolerance_m if tolerance_m is not None else self.tolerances["at_y_m"]
+        poses = [self.provider.object_pose(oid) for oid in object_ids]
+        if axis == "x":
+            fixed_coords = [p[1] for p in poses]
+        else:
+            fixed_coords = [p[0] for p in poses]
+        mean = sum(fixed_coords) / len(fixed_coords)
+        return all(abs(c - mean) <= tol for c in fixed_coords)
+
+    def verify_group_spacing(
+        self,
+        object_ids: tuple[str, ...],
+        expected_spacing: float,
+        axis: str,
+        tolerance_m: float | None = None,
+    ) -> bool:
+        """Check that objects in a group have correct spacing along axis."""
+        if len(object_ids) < 2:
+            return True
+        tol = tolerance_m if tolerance_m is not None else self.tolerances["at_x_m"]
+        poses = [self.provider.object_pose(oid) for oid in object_ids]
+        if axis == "x":
+            moving_coords = sorted(p[0] for p in poses)
+        else:
+            moving_coords = sorted(p[1] for p in poses)
+        for i in range(len(moving_coords) - 1):
+            if abs((moving_coords[i + 1] - moving_coords[i]) - expected_spacing) > tol:
+                return False
+        return True
+
+    def verify_group_color_assignment(
+        self,
+        object_ids: tuple[str, ...],
+        expected_color: str,
+        object_colors: dict[str, str],
+    ) -> bool:
+        """Check that all objects in a group have the expected color."""
+        return all(
+            object_colors.get(oid) == expected_color for oid in object_ids
+        )
+
+    def verify_no_grouped_slot_overlap(
+        self,
+        slots: dict[str, tuple[float, float, float]],
+        gt=None,
+        min_distance: float = 0.066,
+    ) -> bool:
+        """Check that no two grouped slots physically overlap."""
+        poses = list(slots.values())
+        for i in range(len(poses)):
+            for j in range(i + 1, len(poses)):
+                if math.dist(poses[i][:2], poses[j][:2]) < min_distance:
+                    return False
+        return True
+
+    def verify_all_grouped_objects_stable(
+        self,
+        object_ids: tuple[str, ...],
+        include_velocity: bool = True,
+    ) -> bool:
+        """Check that all objects in a group are stable."""
+        return all(
+            self.check_stable(oid, include_velocity=include_velocity)
+            for oid in object_ids
+        )
+
     def evaluate(
         self,
         predicate: dict,

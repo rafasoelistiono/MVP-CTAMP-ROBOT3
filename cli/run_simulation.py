@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 import time
 from dataclasses import replace
@@ -28,7 +29,23 @@ from telemetry.naming import (
     with_experiment_label,
 )
 from world.builder import build_world_state
-from world.slot_allocator import allocate_slots, validate_slots
+from world.slot_allocator import (
+    allocate_grouped_align_slots,
+    allocate_slots,
+    validate_slots,
+)
+
+
+def _collision_count(event_path: Path) -> int:
+    if not event_path.exists():
+        return 0
+    with event_path.open(newline="", encoding="utf-8") as stream:
+        return sum(
+            1
+            for row in csv.DictReader(stream)
+            if row.get("collision_pair")
+            or "collision" in str(row.get("failure_reason", "")).lower()
+        )
 
 
 def _arguments() -> argparse.Namespace:
@@ -132,7 +149,10 @@ def main() -> int:
     plugin = registry.get(plan.task)
     plugin.validate_plan(plan, world)
     slot_config = plugin.make_slot_config(plan, world)
-    slots = allocate_slots(slot_config, len(plan.target_objects))
+    if world.grouped_tidy and world.grouped_tidy.enabled:
+        slots = allocate_grouped_align_slots(world, world.grouped_tidy)
+    else:
+        slots = allocate_slots(slot_config, len(plan.target_objects))
 
     profile_name = args.runtime_profile
     if profile_name == "auto":
@@ -162,6 +182,12 @@ def main() -> int:
         base_model_file=runtime_config.model.xml_path,
         object_states=world.objects,
         obstacle_states=world.obstacles,
+        goal_center=world.goal_center,
+        goal_area_size_xy=world.goal_area_size_xy,
+        table_size_xy=(
+            world.table_x_range[1] - world.table_x_range[0],
+            world.table_y_range[1] - world.table_y_range[0],
+        ),
     )
     runtime_config = replace(
         runtime_config,
@@ -193,6 +219,11 @@ def main() -> int:
         plan_source=args.plan_source,
         benchmark_role=args.benchmark_role,
         benchmark_label=args.benchmark_label or experiment_label,
+        task_variant=world.variant,
+        challenge_type=world.challenge.type if world.challenge else "",
+        num_objects=len(world.objects),
+        num_groups=len(world.grouped_tidy.groups) if world.grouped_tidy else 0,
+        num_obstacles=len(world.obstacles),
     )
     activate_runtime_config(runtime_config)
 
@@ -202,6 +233,7 @@ def main() -> int:
 
     started = time.perf_counter()
     result = None
+    runner = None
     runtime_error: str | None = None
     try:
         runtime.init_hint_cache(log_dir=str(args.log_dir), scene_filter=world.variant)
@@ -241,10 +273,15 @@ def main() -> int:
             "robust_align_candidate_count": rat.candidate_count,
             "robust_align_ranked_costs": list(rat.ranked_costs),
             "robust_align_selected_plan_id": rat.selected_candidate_id or "",
+            "selected_candidate_strategy": rat.selected_candidate_strategy or "",
             "robust_align_failed_before_success": rat.failed_before_success,
+            "failed_candidate_count": rat.failed_before_success,
             "robust_align_probe_planning_time": rat.probe_planning_time,
             "robust_align_ik_failure_count": rat.ik_failure_count,
             "robust_align_ompl_failure_count": rat.ompl_failure_count,
+            "motion_probe_failure_count": (
+                rat.ik_failure_count + rat.ompl_failure_count
+            ),
             "robust_align_alignment_error": rat.alignment_error,
             "robust_align_spacing_error": rat.spacing_error,
         }
@@ -267,6 +304,27 @@ def main() -> int:
             "runtime_profile": runtime_config.name,
             "runtime_config_file": str(args.runtime_config or ""),
             "run_manifest": str(manifest_path),
+            "task_variant": world.variant,
+            "challenge_type": world.challenge.type if world.challenge else "",
+            "num_objects": len(world.objects),
+            "num_groups": len(world.grouped_tidy.groups) if world.grouped_tidy else 0,
+            "num_obstacles": len(world.obstacles),
+            "planner_name": runtime_config.motion.planner,
+            "collision_count": _collision_count(backend_event_path),
+            "plan_steps": len(runner.plan.steps) if runner else len(plan.steps),
+            "executed_steps": len(result.step_results) if result else 0,
+            "retry_count": (
+                sum(max(0, step.attempts - 1) for step in result.step_results)
+                if result
+                else 0
+            ),
+            "execution_time": round(duration_ms / 1000.0, 3),
+            "alignment_error_max": robust_telemetry.get(
+                "robust_align_alignment_error", ""
+            ),
+            "spacing_error_max": robust_telemetry.get(
+                "robust_align_spacing_error", ""
+            ),
             **robust_telemetry,
         },
         log_dir=args.log_dir,

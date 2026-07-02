@@ -38,6 +38,11 @@ def write_run_manifest(
     plan_source: str = "unspecified",
     benchmark_role: str = "candidate",
     benchmark_label: str = "",
+    task_variant: str = "",
+    challenge_type: str = "",
+    num_objects: int | None = None,
+    num_groups: int | None = None,
+    num_obstacles: int | None = None,
 ) -> Path:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +60,13 @@ def write_run_manifest(
             "plan_source": plan_source,
             "role": benchmark_role,
             "label": benchmark_label,
+        },
+        "challenge": {
+            "task_variant": task_variant,
+            "challenge_type": challenge_type,
+            "num_objects": num_objects,
+            "num_groups": num_groups,
+            "num_obstacles": num_obstacles,
         },
         "plan": {"path": str(plan_path), "sha256": sha256_file(plan_path)},
         "context": {

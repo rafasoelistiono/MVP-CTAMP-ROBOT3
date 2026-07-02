@@ -225,14 +225,24 @@ class PandaOMPLPlanner:
                 ss.setPlanner(planner)
 
                 solved = ss.solve(per_try_time)
+                exact = (
+                    bool(solved)
+                    and solved.getStatus() == ob.PlannerStatus.EXACT_SOLUTION
+                )
 
                 last_info["goal_attempts"].append({
                     "idx": goal_idx,
                     "goal_q": goal_try.tolist(),
-                    "status": "solved" if solved else "no_solution",
+                    "status": (
+                        "solved"
+                        if exact
+                        else "approximate_solution"
+                        if solved
+                        else "no_solution"
+                    ),
                 })
 
-                if not solved:
+                if not exact:
                     continue
 
                 if simplify:
