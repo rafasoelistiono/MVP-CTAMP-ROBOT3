@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from backends.adaptive.event_log import EventLog
 from backends.adaptive.hint_cache import HintCache
 from configuration import RuntimeConfig, get_active_runtime_config
+from plugins.common import pyramid_slot_order
 from task_planning.types import ConfirmationResult, ScoredPlan, Step, TaskPlan
 from plugins.registry import PluginRegistry
 from world.state import WorldState
@@ -803,12 +804,7 @@ class TaskRunner:
         return left, right
 
     def _pyramid_slot_order(self) -> tuple[str, ...]:
-        config = self.plan.slot_config
-        slot_ids: list[str] = []
-        for row in range(config.row_count):
-            row_length = config.base_row_length - row
-            slot_ids.extend(f"row{row}_col{column}" for column in range(row_length))
-        return tuple(slot_ids)
+        return pyramid_slot_order(self.plan.slot_config)
 
     def _effects_observed(self, step: Step) -> bool:
         # LLM effects may add checks, but cannot replace the physical effects

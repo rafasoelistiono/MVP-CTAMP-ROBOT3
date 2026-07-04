@@ -133,11 +133,10 @@ def validate_slots(
                 f"{slot_id} is outside goal area y bounds: coordinate=({x:.4f}, {y:.4f}, {z:.4f})"
             )
         for obstacle in world.obstacles:
-            clearance = math.dist((x, y), obstacle.pose[:2])
-            if clearance < obstacle.radius + obstacle_buffer_m:
+            if _inside_obstacle_clearance((x, y), obstacle, obstacle_buffer_m):
                 raise SlotAllocationError(
                     f"{slot_id} violates inflated obstacle region for {obstacle.id}: "
-                    f"clearance={clearance:.4f}"
+                    f"coordinate=({x:.4f}, {y:.4f}, {z:.4f})"
                 )
 
 
@@ -150,6 +149,7 @@ def allocate_grouped_align_slots(
     y_offsets = [
         0.0, 0.04, -0.04, 0.08, -0.08, 0.12, -0.12,
         0.16, -0.16, 0.20, -0.20, 0.24, -0.24,
+        0.28, -0.28,
     ]
     object_height = 0.066
     minimum_slot_distance = 0.066
@@ -256,10 +256,23 @@ def _all_slots_valid(
         if not (goal_y - goal_half_y <= y <= goal_y + goal_half_y):
             return False
         for obstacle in world.obstacles:
-            clearance = math.dist((x, y), obstacle.pose[:2])
-            if clearance < obstacle.radius + obstacle_buffer:
+            if _inside_obstacle_clearance((x, y), obstacle, obstacle_buffer):
                 return False
     return True
+
+
+def _inside_obstacle_clearance(
+    xy: tuple[float, float],
+    obstacle,
+    buffer: float,
+) -> bool:
+    if obstacle.size:
+        half_x, half_y, _ = (value / 2.0 for value in obstacle.size)
+        return (
+            abs(xy[0] - obstacle.pose[0]) < half_x + buffer
+            and abs(xy[1] - obstacle.pose[1]) < half_y + buffer
+        )
+    return math.dist(xy, obstacle.pose[:2]) < obstacle.radius + buffer
 
 
 def _check_slot_overlap(

@@ -11,7 +11,7 @@ SceneVariant = Literal[
     "ungroup_obs",
     "group_long_obs",
     "ungroup_long_obs",
-    "align_grouped_tidy_gang",
+    "align_grouped_tidy_wall_world",
 ]
 
 
@@ -32,6 +32,7 @@ class ObstacleState:
     fragile: bool
     radius: float
     height: Literal["short", "long"]
+    size: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ class ChallengeConfig:
     compare_planners: tuple[str, ...] = ()
     min_gap_width: float = 0.0
     inflated_clearance_required: bool = False
+    wall_blocks_direct_path: bool = False
+    side_corridors_required: bool = False
 
 
 @dataclass(frozen=True)

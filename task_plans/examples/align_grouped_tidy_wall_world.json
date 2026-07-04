@@ -1,0 +1,59 @@
+{
+  "schema_version": "ctamp-plan/v1",
+  "task": "align",
+  "scene_id": "align_grouped_tidy_wall_world",
+  "target_objects": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"],
+  "goal_predicates": [
+    {"name": "at", "args": ["a", "tidy_slot_blue_lane_0"]},
+    {"name": "at", "args": ["b", "tidy_slot_red_lane_0"]},
+    {"name": "at", "args": ["c", "tidy_slot_blue_lane_1"]},
+    {"name": "at", "args": ["d", "tidy_slot_red_lane_1"]},
+    {"name": "at", "args": ["e", "tidy_slot_blue_lane_2"]},
+    {"name": "at", "args": ["f", "tidy_slot_red_lane_2"]},
+    {"name": "at", "args": ["g", "tidy_slot_blue_lane_3"]},
+    {"name": "at", "args": ["h", "tidy_slot_red_lane_3"]},
+    {"name": "at", "args": ["i", "tidy_slot_blue_lane_4"]},
+    {"name": "at", "args": ["j", "tidy_slot_red_lane_4"]},
+    {"name": "at", "args": ["k", "tidy_slot_blue_lane_5"]},
+    {"name": "at", "args": ["l", "tidy_slot_red_lane_5"]}
+  ],
+  "slot_config": {
+    "type": "line",
+    "axis": "x",
+    "spacing_m": 0.085,
+    "row_y": 0.35,
+    "center_x": 0.0,
+    "base_z": 0.833
+  },
+  "steps": [
+    {"step_id": 0, "action": "pick", "object": "a"},
+    {"step_id": 1, "action": "place", "object": "a", "slot": "tidy_slot_blue_lane_0"},
+    {"step_id": 2, "action": "pick", "object": "b"},
+    {"step_id": 3, "action": "place", "object": "b", "slot": "tidy_slot_red_lane_0"},
+    {"step_id": 4, "action": "pick", "object": "c"},
+    {"step_id": 5, "action": "place", "object": "c", "slot": "tidy_slot_blue_lane_1"},
+    {"step_id": 6, "action": "pick", "object": "d"},
+    {"step_id": 7, "action": "place", "object": "d", "slot": "tidy_slot_red_lane_1"},
+    {"step_id": 8, "action": "pick", "object": "e"},
+    {"step_id": 9, "action": "place", "object": "e", "slot": "tidy_slot_blue_lane_2"},
+    {"step_id": 10, "action": "pick", "object": "f"},
+    {"step_id": 11, "action": "place", "object": "f", "slot": "tidy_slot_red_lane_2"},
+    {"step_id": 12, "action": "pick", "object": "g"},
+    {"step_id": 13, "action": "place", "object": "g", "slot": "tidy_slot_blue_lane_3"},
+    {"step_id": 14, "action": "pick", "object": "h"},
+    {"step_id": 15, "action": "place", "object": "h", "slot": "tidy_slot_red_lane_3"},
+    {"step_id": 16, "action": "pick", "object": "i"},
+    {"step_id": 17, "action": "place", "object": "i", "slot": "tidy_slot_blue_lane_4"},
+    {"step_id": 18, "action": "pick", "object": "j"},
+    {"step_id": 19, "action": "place", "object": "j", "slot": "tidy_slot_red_lane_4"},
+    {"step_id": 20, "action": "pick", "object": "k"},
+    {"step_id": 21, "action": "place", "object": "k", "slot": "tidy_slot_blue_lane_5"},
+    {"step_id": 22, "action": "pick", "object": "l"},
+    {"step_id": 23, "action": "place", "object": "l", "slot": "tidy_slot_red_lane_5"}
+  ],
+  "constraints": {
+    "preserve_obstacles": true,
+    "flexible_order": true,
+    "grouped_tidy": true
+  }
+}

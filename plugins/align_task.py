@@ -5,9 +5,9 @@ from dataclasses import replace
 from configuration import RuntimeConfig
 from task_planning.types import SlotConfig, TaskPlan
 from task_planning.validator import PlanValidationError, validate_grouped_align_order
-from world.slot_allocator import allocate_grouped_align_slots
 from world.state import WorldState
 
+from .common import pick_place_pairs, validate_common_cube_plan
 from .protocol import TaskProgress
 
 
@@ -17,61 +17,18 @@ class AlignTaskPlugin:
     supported_actions = {"pick", "place"}
 
     def validate_plan(self, plan: TaskPlan, world: WorldState) -> None:
-        if plan.task != self.name:
-            raise PlanValidationError(
-                f"align plugin cannot execute task {plan.task!r}"
-            )
-        if plan.slot_config.type != "line":
-            raise PlanValidationError("align task requires line slot_config")
-        if plan.target_objects != world.target_objects:
-            raise PlanValidationError(
-                "align plan target_objects must exactly match context task targets"
-            )
-        if plan.constraints.get("preserve_obstacles", True) is not True:
-            raise PlanValidationError("align plan cannot disable obstacle preservation")
-        unsupported = sorted(
-            {step.action for step in plan.steps} - self.supported_actions
+        validate_common_cube_plan(
+            plan,
+            world,
+            task=self.name,
+            slot_type="line",
+            supported_actions=self.supported_actions,
         )
-        if unsupported:
-            raise PlanValidationError(
-                f"align task does not support actions: {unsupported}"
-            )
-        missing_capabilities = sorted(
-            {step.action for step in plan.steps} - set(world.robot_capabilities)
-        )
-        if missing_capabilities:
-            raise PlanValidationError(
-                f"robot lacks capabilities required by align plan: {missing_capabilities}"
-            )
-        non_cubes = [
-            object_id
-            for object_id in plan.target_objects
-            if world.object_by_id(object_id).cls != "cube"
-        ]
-        if non_cubes:
-            raise PlanValidationError(
-                "align task accepts cube objects only: " + ", ".join(non_cubes)
-            )
-        unreachable = [
-            object_id
-            for object_id in plan.target_objects
-            if not world.object_by_id(object_id).reachable
-        ]
-        if unreachable:
-            raise PlanValidationError(
-                "align target objects are unreachable: " + ", ".join(unreachable)
-            )
-        expected = list(plan.target_objects)
-        if len(plan.steps) != len(expected) * 2:
-            raise PlanValidationError(
-                "align plan must contain exactly one pick/place pair per cube"
-            )
+        expected = plan.target_objects
         flexible_order = plan.constraints.get("flexible_order", False)
         used_slots: set[str] = set()
         picked_objects: list[str] = []
-        for index in range(len(expected)):
-            pick_step = plan.steps[index * 2]
-            place_step = plan.steps[index * 2 + 1]
+        for index, _, pick_step, place_step in pick_place_pairs(plan, self.name):
             if pick_step.action != "pick":
                 raise PlanValidationError(
                     "align plan must alternate pick/place starting with pick"
@@ -140,7 +97,6 @@ class AlignTaskPlugin:
     ) -> SlotConfig:
         gt = world.grouped_tidy
         if gt and gt.enabled:
-            slots = allocate_grouped_align_slots(world, gt)
             return SlotConfig(
                 type="line",
                 axis=gt.axis,
@@ -159,9 +115,12 @@ class AlignTaskPlugin:
     ) -> RuntimeConfig:
         gt = world.grouped_tidy
         if gt and gt.enabled:
+            home_q = config.model.home_q
+            if world.scene_id == "align_grouped_tidy_wall_world":
+                home_q = (0.0, -1.0, 0.0, -2.2, 0.0, 1.2, 0.0)
             return replace(
                 config,
-                model=replace(config.model, grasp_ready_q=config.model.home_q),
+                model=replace(config.model, home_q=home_q, grasp_ready_q=home_q),
                 motion=replace(
                     config.motion,
                     time_limit_s=20.0,

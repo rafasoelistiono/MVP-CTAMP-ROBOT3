@@ -15,7 +15,7 @@ from task_planning.generator import (
 )
 from task_planning.loader import parse_plan
 from task_planning.validator import validate
-from plugins.registry import DEFAULT_REGISTRY, PluginRegistry
+from plugins.registry import DEFAULT_REGISTRY
 from telemetry.naming import (
     infer_experiment_label,
     normalize_experiment_label,
@@ -35,11 +35,6 @@ def _arguments() -> argparse.Namespace:
         "--response-file",
         type=Path,
         help="Offline/testing mode: validate an existing raw LLM JSON response.",
-    )
-    parser.add_argument(
-        "--plugin-package",
-        default="plugins",
-        help="Trusted package containing deterministic *_task.py plugins.",
     )
     parser.add_argument(
         "--experiment-label",
@@ -97,11 +92,7 @@ def main() -> int:
             f"plan task {plan.task!r} does not match context {world.task_name!r}"
         )
     validate(plan, world.all_object_ids(), world.allowed_predicates)
-    registry = (
-        DEFAULT_REGISTRY
-        if args.plugin_package == "plugins"
-        else PluginRegistry.discover(args.plugin_package)
-    )
+    registry = DEFAULT_REGISTRY
     registry.get(plan.task).validate_plan(plan, world)
 
     args.output.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,7 @@ VALID_VARIANTS = {
     "ungroup_obs",
     "group_long_obs",
     "ungroup_long_obs",
-    "align_grouped_tidy_gang",
+    "align_grouped_tidy_wall_world",
 }
 _SECTION_RE = re.compile(r"^##\s+([a-zA-Z0-9_-]+)\s*$")
 _FIELD_RE = re.compile(r"^\s*-\s+([a-zA-Z0-9_-]+)\s*:\s*(.*?)\s*$")
@@ -284,6 +284,8 @@ def _parse_challenge(
         inflated_clearance_required=bool(
             raw.get("inflated_clearance_required", False)
         ),
+        wall_blocks_direct_path=bool(raw.get("wall_blocks_direct_path", False)),
+        side_corridors_required=bool(raw.get("side_corridors_required", False)),
     )
 
 
@@ -388,6 +390,11 @@ def build_world_state(path: str | Path) -> WorldState:
                 fragile=bool(raw["fragile"]),
                 radius=float(raw["radius"]),
                 height=height,  # type: ignore[arg-type]
+                size=(
+                    _tuple_numbers(raw["size"], 3, f"obstacles[{index}].size")
+                    if "size" in raw
+                    else None
+                ),
             )
         )
 

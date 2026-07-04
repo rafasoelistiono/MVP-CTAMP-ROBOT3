@@ -91,12 +91,6 @@ Built-in profile:
 - `obstacle`: clearance lebih hati-hati dan planning budget lebih besar;
 - `auto`: dipilih dari scene variant.
 
-Gunakan TOML untuk eksperimen:
-
-```bash
-python -m cli.run_simulation ... --runtime-config configuration/profiles/runtime/verification_strict.toml
-```
-
 Jangan menambahkan tuning baru ke `.env`. Tambahkan field typed bila parameter
 baru benar-benar diperlukan, lalu override nilainya melalui TOML.
 
@@ -111,20 +105,19 @@ python -m cli.run_simulation \
   --viewer
 ```
 
-Untuk stacked pyramid, gunakan hasil generated dari command sebelumnya:
+Untuk stacked pyramid, gunakan reference plan yang dipertahankan:
 
 ```bash
 python -m cli.run_simulation \
-  --plan task_plans/generated/ungroup_obs_pyramid_cubes_pyramid.json \
+  --plan task_plans/examples/ungroup_obs_pyramid_cubes.json \
   --context contexts/examples/ungroup_obs_pyramid_cubes.md \
   --scene ungroup_obs \
-  --runtime-config configuration/profiles/runtime/pyramid.toml \
+  --runtime-profile obstacle \
   --no-viewer
 ```
 
-Profile `pyramid.toml` menyimpan tuning release dan settle untuk stacked
-pyramid. Jangan fine-tune angka release di plugin atau backend; ubah profile
-TOML agar run berikutnya tetap reproducible.
+Profile `obstacle` adalah default untuk stack, pyramid, dan grouped tidy gang
+karena tiga task yang dipertahankan semuanya memiliki obstacle.
 
 Untuk example stack Panda, setiap cube berukuran `0.066 x 0.066 x 0.066 m`
 dan `layer_height_m=0.066` adalah nominal symbolic.

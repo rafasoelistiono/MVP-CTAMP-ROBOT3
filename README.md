@@ -56,149 +56,14 @@ flowchart TD
     AE --> AH
 ```
 
-## Benchmark TaskPlan enam LLM
+## TaskPlan Aktif
 
-Visualisasi berikut membandingkan DeepSeek V4 Flash, Qwen3 Coder, MiniMax M3,
-GPT-OSS, Sonnet 4.6, dan GPT-5.5 pada context `stack` dan `pyramid`.
-Untuk challenge `pyramid` terbaru, run MiniMax yang tersedia adalah MiniMax
-M2.7 (`minimaxm27`). Satu data point adalah **run terbaru** untuk pasangan task
-dan model. Karena saat ini hanya satu run terbaru per pasangan yang dipilih,
-hasil ini merupakan perbandingan run, bukan estimasi statistik atau rata-rata
-keberhasilan model.
+Artefak task yang dipertahankan:
 
-TaskPlan pembanding adalah
-`task_plans/examples/ungroup_obs_stack_cubes.json` dan
-`task_plans/examples/ungroup_obs_pyramid_cubes.json`. Arti metrik pada kedua
-gambar:
-
-- **Summary completion**: nilai `completion_percent` yang ditulis summary CSV.
-- **Verified placements**: persentase target unik dengan event `STEP=OK` untuk
-  `place` atau `stack_place`; placement recovery tetap dihitung.
-- **Final goal reached**: hasil verifier final yang direkam sebagai `success`.
-- **Planned steps OK**: step ID asli TaskPlan yang pernah menghasilkan
-  `STEP=OK`, dibagi jumlah step asli. Step recovery tambahan tidak masuk
-  denominator.
-- **Failed STEP attempts**: seluruh attempt berstatus `FAILED`, termasuk retry.
-- **Plan structure match**: kecocokan per posisi untuk tuple `action`, `object`,
-  `slot`, dan `on_top_of` terhadap TaskPlan pembanding.
-- **Goal predicate match**: Jaccard similarity antara himpunan predicate plan
-  kandidat dan plan pembanding. Predicate tambahan ikut menurunkan skor.
-- **Slot geometry deviation**: selisih absolut field geometri terhadap plan
-  pembanding dalam milimeter. Ini mengukur perbedaan plan, bukan otomatis
-  kesalahan fisik, karena backend masih melakukan geometric binding dari state
-  MuJoCo.
-- **Runtime**: `duration_ms` summary yang dikonversi ke detik.
-
-### Stack
-
-![Perbandingan performa dan goal state stack enam LLM](docs/images/llm_stack_benchmark.png)
-
-Cara membaca visualisasi `stack`:
-
-- **Execution progress** membandingkan summary dengan placement tower yang
-  benar-benar terverifikasi. Untuk stack, panel ini menguji apakah semua cube
-  berhasil ditempatkan sebagai tower, bukan hanya step selesai dieksekusi.
-  Insight utama: keenam LLM konsisten 100% pada summary dan verified placement,
-  sehingga semua run mencapai stack 4/4.
-- **Runtime and failed STEP attempts** membandingkan durasi eksekusi dengan
-  jumlah failed attempt. Untuk stack, runtime terutama dipengaruhi retry dan
-  rebuild tower, bukan perbedaan jumlah step karena struktur plan keenam model
-  hampir sama. Insight utama: semua model punya dua failed attempt dan satu
-  rebuild; GPT-OSS paling cepat pada sampel ini, tetapi selisihnya kecil karena
-  semua menjalani pola recovery yang sama.
-- **Goal state and TaskPlan fidelity** membandingkan final goal, step asli OK,
-  struktur action, dan predicate match. Panel ini menunjukkan apakah tower
-  berhasil karena plan memang sesuai kontrak atau karena recovery menutup error
-  eksekusi. Insight utama: final goal semua 100% dan struktur action semua
-  100%; nilai `Planned steps OK` hanya 88% karena ada step asli yang gagal lalu
-  digantikan oleh recovery/rebuild.
-- **Slot geometry deviation** membandingkan `base_z` dan `layer_height_m`
-  terhadap reference plan. Untuk stack, ini penting karena sedikit perbedaan Z
-  dapat mempengaruhi stabilitas tower. Insight utama: MiniMax M3, Sonnet 4.6,
-  dan GPT-5.5 memakai geometri yang sama dengan reference; DeepSeek, Qwen3
-  Coder, dan GPT-OSS berbeda pada `base_z`, tetapi backend binding dan recovery
-  masih membuat final tower berhasil.
-
-| Model | Summary | Placement terverifikasi | Final goal | Runtime | Failed attempt | Rebuild | Predicate |
-|---|---:|---:|:---:|---:|---:|---:|---:|
-| DeepSeek V4 Flash | 100% | 100% (4/4) | berhasil | 119.417 s | 2 | 1 | 67% |
-| Qwen3 Coder | 100% | 100% (4/4) | berhasil | 119.114 s | 2 | 1 | 100% |
-| MiniMax M3 | 100% | 100% (4/4) | berhasil | 114.563 s | 2 | 1 | 100% |
-| GPT-OSS | 100% | 100% (4/4) | berhasil | 113.451 s | 2 | 1 | 100% |
-| Sonnet 4.6 | 100% | 100% (4/4) | berhasil | 114.666 s | 2 | 1 | 80% |
-| GPT-5.5 | 100% | 100% (4/4) | berhasil | 116.101 s | 2 | 1 | 80% |
-
-Semua run `stack` mencapai tower 4/4. Setiap run memiliki dua failed attempt dan
-satu `STACK_REBUILD`; akibatnya hanya 7 dari 8 step ID asli yang pernah berstatus
-OK (87.5%, dibulatkan 88% pada gambar), tetapi placement recovery membuat final
-goal tetap 100%. GPT-OSS memiliki runtime terpendek pada sampel ini, sedangkan
-Sonnet 4.6 dan GPT-5.5 tetap berada di kelompok berhasil dengan geometri base
-dan layer yang sama dengan reference plan.
-
-Seluruh plan `stack` cocok 100% pada struktur action. Perbedaan predicate bukan
-kegagalan eksekusi: DeepSeek turun ke 67% karena menambahkan `clear(cube4)` dan
-`handempty`, sedangkan Sonnet 4.6 dan GPT-5.5 turun ke 80% karena menambahkan
-`clear(cube4)` di luar empat predicate referensi.
-
-### Pyramid
-
-![Perbandingan performa dan goal state pyramid enam LLM](docs/images/llm_pyramid_benchmark.png)
-
-Cara membaca visualisasi `pyramid`:
-
-- **Execution progress** membandingkan `summary completion` dengan 6 placement
-  pyramid yang benar-benar terverifikasi. Panel ini penting karena semua run
-  menulis summary 100%, tetapi tidak semua run mencapai 6/6 placement valid.
-  Insight utama: DeepSeek V4 Flash, Qwen3 Coder, Sonnet 4.6, dan GPT-5.5
-  mencapai 100% verified placement, sedangkan MiniMax M2.7 dan GPT-OSS hanya
-  50% (3/6).
-- **Runtime and failed STEP attempts** membandingkan durasi simulasi dengan
-  jumlah attempt step yang gagal. Untuk pyramid, runtime tidak otomatis berarti
-  kualitas lebih baik: GPT-5.5 paling cepat dan berhasil, tetapi MiniMax M2.7
-  juga cepat karena gagal setelah separuh pyramid. GPT-OSS justru lama tetapi
-  tetap gagal karena empat attempt step tidak menghasilkan goal final.
-- **Goal state and TaskPlan fidelity** memisahkan goal simulasi dari kualitas
-  JSON simbolik. Semua model memiliki struktur plan 100%, tetapi final goal
-  MiniMax M2.7 dan GPT-OSS tetap 0% karena hanya 9 dari 12 step asli yang
-  pernah OK dan hanya 3 cube yang terverifikasi di pyramid.
-- **Slot geometry deviation** membandingkan `spacing_m`, `base_z`, dan
-  `layer_height_m` terhadap reference plan. Insight utama: MiniMax M2.7 dan
-  GPT-OSS memakai `base_z` 33 mm lebih rendah dari reference; perbedaan ini
-  berkorelasi dengan final goal yang gagal pada dua run tersebut.
-
-| Model | Summary | Placement terverifikasi | Final goal | Runtime | Failed attempt | Planned OK | Struktur plan | Predicate |
-|---|---:|---:|:---:|---:|---:|---:|---:|---:|
-| DeepSeek V4 Flash | 100% | 100% (6/6) | berhasil | 313.237 s | 1 | 100% | 100% | 43% |
-| Qwen3 Coder | 100% | 100% (6/6) | berhasil | 296.591 s | 1 | 100% | 100% | 100% |
-| MiniMax M2.7 | 100% | 50% (3/6) | gagal | 75.545 s | 4 | 75% | 100% | 100% |
-| GPT-OSS | 100% | 50% (3/6) | gagal | 334.301 s | 4 | 75% | 100% | 100% |
-| Sonnet 4.6 | 100% | 100% (6/6) | berhasil | 363.340 s | 1 | 100% | 100% | 86% |
-| GPT-5.5 | 100% | 100% (6/6) | berhasil | 73.582 s | 1 | 100% | 100% | 86% |
-
-Empat run `pyramid` mencapai final goal 6/6: DeepSeek V4 Flash, Qwen3 Coder,
-Sonnet 4.6, dan GPT-5.5. GPT-5.5 menjadi run berhasil tercepat pada sampel ini,
-sedangkan Sonnet 4.6 paling lama tetapi tetap stabil sampai verifier final.
-Qwen3 Coder menjadi baseline simbolik paling bersih karena struktur dan
-predicate sama-sama 100%.
-
-MiniMax M2.7 dan GPT-OSS menunjukkan kasus penting: `completion_percent` tetap
-100%, struktur action 100%, dan predicate 100%, tetapi final goal gagal karena
-hanya 3 dari 6 placement yang terverifikasi. Keduanya juga memakai `base_z`
-0.800 m, sedangkan reference memakai 0.833 m. Deviasi 33 mm ini membuat plan
-terlihat valid secara JSON tetapi tidak cukup cocok dengan kondisi fisik yang
-dibaca verifier simulasi.
-
-Perbedaan predicate pada run yang berhasil bukan kegagalan eksekusi. DeepSeek
-turun ke 43% karena menambahkan predicate `on`, `clear(cube6)`, dan `handempty`
-di luar enam predicate `at(...)` referensi. Sonnet 4.6 dan GPT-5.5 turun ke 86%
-karena hanya menambahkan `clear(cube6)`.
-
-Gambar dapat dibuat ulang setelah log baru ditambahkan:
-
-```bash
-python -m pip install -e ".[viz]"
-python -m telemetry.visualize_llm_benchmarks
-```
+- `task_plans/examples/ungroup_obs_stack_cubes.json`
+- `task_plans/examples/ungroup_obs_pyramid_cubes.json`
+- `contexts/examples/align_grouped_tidy_wall_world.md`
+- `task_plans/examples/align_grouped_tidy_wall_world.json`
 
 ## Report Alur Kerja Framework
 
@@ -708,12 +573,10 @@ Kontribusi file:
 - `backends/adaptive/event_log.py`: event CSV append-only dari runner.
 - `telemetry/summary.py`: summary CSV untuk benchmark.
 - `telemetry/run_manifest.py`: audit trail lengkap.
-- `telemetry/visualize_llm_benchmarks.py`: visualisasi benchmark dari log CSV.
 
 Titik ekstensibilitas:
 
 - Kolom telemetry baru bisa ditambah di event/summary writer.
-- Visualisasi baru bisa dibuat dari artefak yang sama tanpa mengubah runner.
 
 ### Analisis Perbedaan Generate Plan dan Run Simulation
 
@@ -784,16 +647,15 @@ Jalankan stacked pyramid obstacle tanpa viewer:
 
 ```bash
 python -m cli.run_simulation \
-  --plan task_plans/generated/ungroup_obs_pyramid_cubes_pyramid.json \
+  --plan task_plans/examples/ungroup_obs_pyramid_cubes.json \
   --context contexts/examples/ungroup_obs_pyramid_cubes.md \
   --scene ungroup_obs \
-  --runtime-config configuration/profiles/runtime/pyramid.toml \
+  --runtime-profile obstacle \
   --no-viewer
 ```
 
-Gunakan `pyramid.toml` untuk case stacked pyramid karena release height,
-guided-open, dan settle count disimpan di profile tersebut. Jangan fine-tune
-angka release langsung di plugin atau backend.
+Gunakan profile `obstacle` untuk stacked pyramid; tuning task tidak disimpan di
+plugin atau backend.
 
 ## Struktur utama
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import importlib
-import pkgutil
-
+from plugins.align_task import PLUGIN as ALIGN_PLUGIN
 from plugins.protocol import TaskPlugin
+from plugins.pyramid_task import PLUGIN as PYRAMID_PLUGIN
+from plugins.stack_task import PLUGIN as STACK_PLUGIN
 
 
 TASK_PLUGIN_API_VERSION = "ctamp-task/v2"
@@ -43,36 +43,19 @@ class PluginRegistry:
             raise ValueError(
                 f"Task {task_name!r} tidak terdaftar. "
                 f"Tersedia: {sorted(self._plugins)}. "
-                "Tambahkan modul '*_task.py' dengan export PLUGIN yang "
-                "mengimplementasikan TaskPlugin."
+                "Task yang didukung: align, pyramid, stack."
             )
         return self._plugins[task_name]
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._plugins))
 
-    @classmethod
-    def discover(cls, package_name: str = "plugins") -> "PluginRegistry":
-        """Discover trusted built-in task modules in deterministic name order."""
-        package = importlib.import_module(package_name)
-        package_paths = getattr(package, "__path__", None)
-        if package_paths is None:
-            raise ValueError(f"plugin package {package_name!r} has no package path")
-        registry = cls()
-        module_names = sorted(
-            info.name
-            for info in pkgutil.iter_modules(package_paths)
-            if info.name.endswith("_task")
-        )
-        for module_name in module_names:
-            module = importlib.import_module(f"{package_name}.{module_name}")
-            plugin = getattr(module, "PLUGIN", None)
-            if plugin is None:
-                raise ValueError(
-                    f"plugin module {module.__name__!r} must export PLUGIN"
-                )
-            registry.register(plugin)
-        return registry
+
+def _default_registry() -> PluginRegistry:
+    registry = PluginRegistry()
+    for plugin in (ALIGN_PLUGIN, PYRAMID_PLUGIN, STACK_PLUGIN):
+        registry.register(plugin)
+    return registry
 
 
-DEFAULT_REGISTRY = PluginRegistry.discover()
+DEFAULT_REGISTRY = _default_registry()

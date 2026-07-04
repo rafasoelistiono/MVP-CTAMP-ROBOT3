@@ -35,7 +35,7 @@ SCENE_ALIASES = {
     "ungroup long obs": "ungroup_long_obs",
     "ungroup_long": "ungroup_long_obs",
     "ungroup long": "ungroup_long_obs",
-    "align_grouped_tidy_gang": "align_grouped_tidy_gang",
+    "align_grouped_tidy_wall_world": "align_grouped_tidy_wall_world",
 }
 
 GOAL_CENTER = (0.22, -0.06, 0.806)
@@ -153,7 +153,7 @@ def normalize_scene_key(raw: str | Iterable[str] | None) -> str:
 def obstacle_mode_for_scene(scene_key: str) -> str:
     if scene_key.endswith("_no_obs"):
         return "no_obs"
-    if scene_key.endswith("_obs") or scene_key == "align_grouped_tidy_gang":
+    if scene_key.endswith("_obs") or scene_key == "align_grouped_tidy_wall_world":
         return "obs"
     return "unknown"
 
@@ -188,14 +188,6 @@ def prepare_scene_variant(
     if worldbody is None:
         raise RuntimeError("models/panda.xml has no worldbody")
 
-    if scene_key == "align_grouped_tidy_gang":
-        finger_actuator = root.find(
-            "./actuator/position[@joint='finger_joint1']"
-        )
-        if finger_actuator is None:
-            raise RuntimeError("base model has no finger_joint1 actuator")
-        finger_actuator.set("kp", "600")
-
     if table_size_xy is not None:
         table_geom = worldbody.find("./body[@name='table']/geom[@name='table_top']")
         if table_geom is None:
@@ -213,12 +205,33 @@ def prepare_scene_variant(
             worldbody.remove(body)
 
     link0_index = 0
+    link0_body = None
     for idx, body in enumerate(list(worldbody)):
         if body.tag == "body" and body.get("name") == "link0":
             link0_index = idx
+            link0_body = body
             break
+    if scene_key == "align_grouped_tidy_wall_world" and link0_body is not None:
+        base_pos = link0_body.get("pos", "-0.4 0 0.8").split()
+        link0_body.set("pos", f"{base_pos[0]} -0.18 {base_pos[2]}")
 
-    inserts = [_goal_area_body(goal_center, goal_area_size_xy)]
+    inserts = [
+        _goal_area_body(
+            goal_center,
+            goal_area_size_xy,
+            show_zones=scene_key != "align_grouped_tidy_wall_world",
+            left_rgba=(
+                "0.05 0.25 1.0 0.25"
+                if scene_key == "align_grouped_tidy_wall_world"
+                else "0.20 0.75 0.35 0.25"
+            ),
+            right_rgba=(
+                "1.0 0.05 0.02 0.25"
+                if scene_key == "align_grouped_tidy_wall_world"
+                else "0.25 0.45 0.95 0.25"
+            ),
+        )
+    ]
     if object_states is None:
         for object_name, pos in VARIANT_OBJECTS[scene_key].items():
             inserts.append(_movable_body(object_name, pos))
@@ -230,21 +243,13 @@ def prepare_scene_variant(
                     state.pose,
                     cls=state.cls,
                     rgba_override=getattr(state, "rgba", None),
-                    cube_friction=(
-                        "3 1.5 0.8"
-                        if scene_key == "align_grouped_tidy_gang"
-                        else None
-                    ),
-                    cube_mass=(
-                        0.06 if scene_key == "align_grouped_tidy_gang" else None
-                    ),
                 )
             )
 
     if obstacle_mode_for_scene(scene_key) == "obs":
         fixed = (
             scene_key.endswith("_long_obs")
-            or scene_key == "align_grouped_tidy_gang"
+            or scene_key == "align_grouped_tidy_wall_world"
         )
         if obstacle_states is None:
             half_height = _obstacle_half_height_for_scene(scene_key)
@@ -253,26 +258,21 @@ def prepare_scene_variant(
         else:
             for state in obstacle_states:
                 half_height = (
-                    GROUPED_TIDY_WALL_HALF_HEIGHT
-                    if scene_key == "align_grouped_tidy_gang"
-                    else (
-                        LONG_OBSTACLE_HALF_HEIGHT
-                        if state.height == "long"
-                        else DEFAULT_OBSTACLE_HALF_HEIGHT
-                    )
+                    LONG_OBSTACLE_HALF_HEIGHT
+                    if state.height == "long"
+                    else DEFAULT_OBSTACLE_HALF_HEIGHT
                 )
+                size = getattr(state, "size", None)
+                wall = scene_key == "align_grouped_tidy_wall_world"
                 inserts.append(
                     _obstacle_body(
                         state.id,
                         state.pose,
-                        radius=(
-                            state.radius
-                            if scene_key == "align_grouped_tidy_gang"
-                            else 0.035
-                        ),
-                        half_height=half_height,
+                        radius=size[0] / 2.0 if size else state.radius,
+                        half_depth=size[1] / 2.0 if size else GROUPED_TIDY_WALL_HALF_DEPTH,
+                        half_height=size[2] / 2.0 if size else half_height,
                         fixed=fixed,
-                        wall=scene_key == "align_grouped_tidy_gang",
+                        wall=wall,
                     )
                 )
 
@@ -345,17 +345,40 @@ def _inside_goal_area(x: float, y: float) -> bool:
 def _goal_area_body(
     center: tuple[float, float, float] | None = None,
     size_xy: tuple[float, float] | None = None,
+    *,
+    show_zones: bool = True,
+    split_axis: str = "x",
+    left_rgba: str = "0.20 0.75 0.35 0.25",
+    right_rgba: str = "0.25 0.45 0.95 0.25",
 ) -> ET.Element:
     center_x, center_y = (center or GOAL_CENTER)[:2]
     size_x, size_y = size_xy or (GOAL_HALF_SIZE_X * 2.0, GOAL_HALF_SIZE_Y * 2.0)
     half_x = size_x / 2.0
     half_y = size_y / 2.0
+    if not show_zones:
+        return ET.fromstring(
+            f"""
+            <body name="goal_area" pos="{center_x} {center_y} 0.806">
+              <geom name="goal_area_base" type="box" size="{half_x} {half_y} 0.003" rgba="0.05 0.35 0.95 0.22" contype="0" conaffinity="0"/>
+            </body>
+            """
+        )
+    if split_axis == "y":
+        green_size = f"{half_x - 0.01} {half_y / 2.0 - 0.01} 0.004"
+        blue_size = green_size
+        green_pos = f"0 {-half_y / 2.0} 0.004"
+        blue_pos = f"0 {half_y / 2.0} 0.004"
+    else:
+        green_size = f"{half_x / 2.0 - 0.01} {half_y - 0.01} 0.004"
+        blue_size = green_size
+        green_pos = f"{-half_x / 2.0} 0 0.004"
+        blue_pos = f"{half_x / 2.0} 0 0.004"
     return ET.fromstring(
         f"""
         <body name="goal_area" pos="{center_x} {center_y} 0.806">
           <geom name="goal_area_base" type="box" size="{half_x} {half_y} 0.003" rgba="0.05 0.35 0.95 0.22" contype="0" conaffinity="0"/>
-          <geom name="goal_left_zone" type="box" size="{half_x / 2.0 - 0.01} {half_y - 0.01} 0.004" pos="{-half_x / 2.0} 0 0.004" rgba="0.20 0.75 0.35 0.25" contype="0" conaffinity="0"/>
-          <geom name="goal_right_zone" type="box" size="{half_x / 2.0 - 0.01} {half_y - 0.01} 0.004" pos="{half_x / 2.0} 0 0.004" rgba="0.25 0.45 0.95 0.25" contype="0" conaffinity="0"/>
+          <geom name="goal_left_zone" type="box" size="{green_size}" pos="{green_pos}" rgba="{left_rgba}" contype="0" conaffinity="0"/>
+          <geom name="goal_right_zone" type="box" size="{blue_size}" pos="{blue_pos}" rgba="{right_rgba}" contype="0" conaffinity="0"/>
         </body>
         """
     )
@@ -409,6 +432,7 @@ def _obstacle_body(
     name: str,
     pos: tuple[float, float, float],
     radius: float = 0.035,
+    half_depth: float = GROUPED_TIDY_WALL_HALF_DEPTH,
     half_height: float = DEFAULT_OBSTACLE_HALF_HEIGHT,
     fixed: bool = False,
     wall: bool = False,
@@ -416,7 +440,7 @@ def _obstacle_body(
     joint = "" if fixed else '<joint type="free"/>'
     if wall:
         geom = (
-            f'<geom type="box" size="{radius} {GROUPED_TIDY_WALL_HALF_DEPTH} '
+            f'<geom type="box" size="{radius} {half_depth} '
             f'{half_height}" mass="2.0" friction="2 1 0.5" '
             'rgba="0.35 0.35 0.40 0.92" contype="1" conaffinity="1"/>'
         )

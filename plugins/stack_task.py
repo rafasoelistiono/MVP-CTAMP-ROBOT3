@@ -7,6 +7,7 @@ from task_planning.types import SlotConfig, TaskPlan
 from task_planning.validator import PlanValidationError
 from world.state import WorldState
 
+from .common import pick_place_pairs, validate_common_cube_plan
 from .protocol import TaskProgress
 
 
@@ -16,51 +17,15 @@ class StackTaskPlugin:
     supported_actions = {"pick", "place", "stack_place"}
 
     def validate_plan(self, plan: TaskPlan, world: WorldState) -> None:
-        if plan.task != self.name:
-            raise PlanValidationError(
-                f"stack plugin cannot execute task {plan.task!r}"
-            )
-        if plan.slot_config.type != "tower":
-            raise PlanValidationError("stack task requires tower slot_config")
-        if plan.target_objects != world.target_objects:
-            raise PlanValidationError(
-                "stack plan target_objects must exactly match context task targets"
-            )
-        if plan.constraints.get("preserve_obstacles", True) is not True:
-            raise PlanValidationError("stack plan cannot disable obstacle preservation")
-        missing_capabilities = sorted(
-            {step.action for step in plan.steps} - set(world.robot_capabilities)
+        validate_common_cube_plan(
+            plan,
+            world,
+            task=self.name,
+            slot_type="tower",
+            supported_actions=self.supported_actions,
         )
-        if missing_capabilities:
-            raise PlanValidationError(
-                f"robot lacks capabilities required by stack plan: {missing_capabilities}"
-            )
-        non_cubes = [
-            object_id
-            for object_id in plan.target_objects
-            if world.object_by_id(object_id).cls != "cube"
-        ]
-        if non_cubes:
-            raise PlanValidationError(
-                "stack task accepts cube objects only: " + ", ".join(non_cubes)
-            )
-        unreachable = [
-            object_id
-            for object_id in plan.target_objects
-            if not world.object_by_id(object_id).reachable
-        ]
-        if unreachable:
-            raise PlanValidationError(
-                "stack target objects are unreachable: " + ", ".join(unreachable)
-            )
-        expected = list(plan.target_objects)
-        if len(plan.steps) != len(expected) * 2:
-            raise PlanValidationError(
-                "stack plan must contain exactly one pick/place pair per cube"
-            )
-        for level, object_id in enumerate(expected):
-            pick_step = plan.steps[level * 2]
-            place_step = plan.steps[level * 2 + 1]
+        expected = plan.target_objects
+        for level, object_id, pick_step, place_step in pick_place_pairs(plan, self.name):
             if pick_step.action != "pick" or pick_step.object != object_id:
                 raise PlanValidationError(
                     "stack plan must pick each cube once in bottom-to-top order"

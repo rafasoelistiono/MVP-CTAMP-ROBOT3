@@ -16,20 +16,29 @@ from scene import prepare_scene_variant
 from task_planning.loader import load_plan
 from task_planning.validator import validate
 from world.builder import build_world_state
-from world.slot_allocator import allocate_slots, validate_slots
+from world.slot_allocator import (
+    allocate_grouped_align_slots,
+    allocate_slots,
+    validate_slots,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = (
     (
         "align",
-        ROOT / "contexts/examples/ungroup_obs_align_cubes.md",
-        ROOT / "task_plans/examples/ungroup_obs_align_cubes.json",
+        ROOT / "contexts/examples/align_grouped_tidy_wall_world.md",
+        ROOT / "task_plans/examples/align_grouped_tidy_wall_world.json",
     ),
     (
         "stack",
         ROOT / "contexts/examples/ungroup_obs_stack_cubes.md",
         ROOT / "task_plans/examples/ungroup_obs_stack_cubes.json",
+    ),
+    (
+        "pyramid",
+        ROOT / "contexts/examples/ungroup_obs_pyramid_cubes.md",
+        ROOT / "task_plans/examples/ungroup_obs_pyramid_cubes.json",
     ),
 )
 
@@ -154,7 +163,6 @@ def test_obstacle_example_passes_complete_deterministic_pipeline(
 ):
     world = build_world_state(context_path)
     plan = load_plan(plan_path)
-    assert world.variant == "ungroup_obs"
     assert world.task_name == task == plan.task
     assert plan.scene_id == world.scene_id
 
@@ -167,14 +175,31 @@ def test_obstacle_example_passes_complete_deterministic_pipeline(
         world,
         load_runtime_config("obstacle"),
     )
-    slots = allocate_slots(plugin.make_slot_config(plan, world), 4)
+    if world.grouped_tidy and world.grouped_tidy.enabled:
+        slots = allocate_grouped_align_slots(world, world.grouped_tidy)
+    else:
+        slots = allocate_slots(
+            plugin.make_slot_config(plan, world),
+            len(plan.target_objects),
+        )
     validate_slots(
         slots,
         world,
         obstacle_buffer_m=config.safety.target_obstacle_buffer_m,
     )
 
-    scene_path = prepare_scene_variant(world.variant, base_model_file=config.model.xml_path)
+    scene_path = prepare_scene_variant(
+        world.variant,
+        base_model_file=config.model.xml_path,
+        object_states=world.objects,
+        obstacle_states=world.obstacles,
+        goal_center=world.goal_center,
+        goal_area_size_xy=world.goal_area_size_xy,
+        table_size_xy=(
+            world.table_x_range[1] - world.table_x_range[0],
+            world.table_y_range[1] - world.table_y_range[0],
+        ),
+    )
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     assert model.nbody > 0
 
@@ -193,7 +218,7 @@ def test_obstacle_example_passes_complete_deterministic_pipeline(
     ).run()
 
     assert result.success
-    assert result.moved_count == 4
+    assert result.moved_count == len(plan.target_objects)
     assert not result.failure_reasons
 
 

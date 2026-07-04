@@ -20,7 +20,7 @@ from execution.primitives import MuJoCoExecutorPrimitives
 from execution.runner import TaskRunner
 from task_planning.loader import load_plan
 from task_planning.validator import validate
-from plugins.registry import DEFAULT_REGISTRY, PluginRegistry
+from plugins.registry import DEFAULT_REGISTRY
 from scene import prepare_scene_variant
 from telemetry import write_run_manifest, write_summary_csv
 from telemetry.naming import (
@@ -72,11 +72,6 @@ def _arguments() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Override profile viewer setting.",
-    )
-    parser.add_argument(
-        "--plugin-package",
-        default="plugins",
-        help="Trusted package containing deterministic *_task.py plugins.",
     )
     parser.add_argument(
         "--plan-source",
@@ -141,11 +136,7 @@ def main() -> int:
             f"plan task {plan.task!r} does not match context {world.task_name!r}"
         )
     validate(plan, world.all_object_ids(), world.allowed_predicates)
-    registry = (
-        DEFAULT_REGISTRY
-        if args.plugin_package == "plugins"
-        else PluginRegistry.discover(args.plugin_package)
-    )
+    registry = DEFAULT_REGISTRY
     plugin = registry.get(plan.task)
     plugin.validate_plan(plan, world)
     slot_config = plugin.make_slot_config(plan, world)
@@ -215,7 +206,7 @@ def main() -> int:
         scene_id=world.scene_id,
         scene_variant=world.variant,
         task=plan.task,
-        plugin_package=args.plugin_package,
+        plugin_package="plugins",
         plan_source=args.plan_source,
         benchmark_role=args.benchmark_role,
         benchmark_label=args.benchmark_label or experiment_label,

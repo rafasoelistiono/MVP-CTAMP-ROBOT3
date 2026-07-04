@@ -7,6 +7,7 @@ from task_planning.types import SlotConfig, TaskPlan
 from task_planning.validator import PlanValidationError
 from world.state import WorldState
 
+from .common import pick_place_pairs, pyramid_slot_order, validate_common_cube_plan
 from .protocol import TaskProgress
 
 
@@ -16,70 +17,26 @@ class PyramidTaskPlugin:
     supported_actions = {"pick", "place"}
 
     def validate_plan(self, plan: TaskPlan, world: WorldState) -> None:
-        if plan.task != self.name:
-            raise PlanValidationError(
-                f"pyramid plugin cannot execute task {plan.task!r}"
-            )
-        if plan.slot_config.type != "pyramid":
-            raise PlanValidationError("pyramid task requires pyramid slot_config")
-        if plan.target_objects != world.target_objects:
-            raise PlanValidationError(
-                "pyramid plan target_objects must exactly match context task targets"
-            )
-        if plan.constraints.get("preserve_obstacles", True) is not True:
-            raise PlanValidationError("pyramid plan cannot disable obstacle preservation")
+        validate_common_cube_plan(
+            plan,
+            world,
+            task=self.name,
+            slot_type="pyramid",
+            supported_actions=self.supported_actions,
+        )
         build_order = plan.constraints.get("build_order")
         if build_order is not None and tuple(build_order) != plan.target_objects:
             raise PlanValidationError(
                 "pyramid build_order must match target_objects base-row first"
             )
 
-        unsupported = sorted(
-            {step.action for step in plan.steps} - self.supported_actions
-        )
-        if unsupported:
-            raise PlanValidationError(
-                f"pyramid task does not support actions: {unsupported}"
-            )
-        missing_capabilities = sorted(
-            {step.action for step in plan.steps} - set(world.robot_capabilities)
-        )
-        if missing_capabilities:
-            raise PlanValidationError(
-                f"robot lacks capabilities required by pyramid plan: {missing_capabilities}"
-            )
-        non_cubes = [
-            object_id
-            for object_id in plan.target_objects
-            if world.object_by_id(object_id).cls != "cube"
-        ]
-        if non_cubes:
-            raise PlanValidationError(
-                "pyramid task accepts cube objects only: " + ", ".join(non_cubes)
-            )
-        unreachable = [
-            object_id
-            for object_id in plan.target_objects
-            if not world.object_by_id(object_id).reachable
-        ]
-        if unreachable:
-            raise PlanValidationError(
-                "pyramid target objects are unreachable: " + ", ".join(unreachable)
-            )
-
-        expected_slots = _pyramid_slot_order(plan.slot_config)
+        expected_slots = pyramid_slot_order(plan.slot_config)
         if len(expected_slots) != len(plan.target_objects):
             raise PlanValidationError(
                 "pyramid slot count must match target_objects count"
             )
-        if len(plan.steps) != len(plan.target_objects) * 2:
-            raise PlanValidationError(
-                "pyramid plan must contain exactly one pick/place pair per cube"
-            )
 
-        for index, object_id in enumerate(plan.target_objects):
-            pick_step = plan.steps[index * 2]
-            place_step = plan.steps[index * 2 + 1]
+        for index, object_id, pick_step, place_step in pick_place_pairs(plan, self.name):
             expected_slot = expected_slots[index]
             if pick_step.action != "pick" or pick_step.object != object_id:
                 raise PlanValidationError(
@@ -159,21 +116,12 @@ class PyramidTaskPlugin:
                 for object_id in plan.target_objects
             )
 
-        for object_id, slot_id in zip(plan.target_objects, _pyramid_slot_order(plan.slot_config)):
+        for object_id, slot_id in zip(plan.target_objects, pyramid_slot_order(plan.slot_config)):
             if not verifier.check_at(object_id, slots[slot_id]):
                 return False
         return all(
             verifier.check_stable(object_id, include_velocity=True)
             for object_id in plan.target_objects
         )
-
-
-def _pyramid_slot_order(config: SlotConfig) -> tuple[str, ...]:
-    slot_ids: list[str] = []
-    for row in range(config.row_count):
-        row_length = config.base_row_length - row
-        slot_ids.extend(f"row{row}_col{column}" for column in range(row_length))
-    return tuple(slot_ids)
-
 
 PLUGIN = PyramidTaskPlugin()

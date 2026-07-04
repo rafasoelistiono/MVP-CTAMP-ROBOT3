@@ -9,7 +9,7 @@ from task_planning.validator import PlanValidationError, validate
 from world.builder import build_world_state
 from world.slot_allocator import allocate_grouped_align_slots
 
-CONTEXT_PATH = "contexts/examples/align_grouped_tidy_gang.md"
+CONTEXT_PATH = "contexts/examples/align_grouped_tidy_wall_world.md"
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def _make_plan(world, gt, slots, overrides=None):
         "goal_predicates": goal_predicates,
         "slot_config": {
             "type": "line",
-            "axis": gt.axis,
+            "axis": "x",
             "spacing_m": gt.spacing,
             "row_y": world.goal_center[1],
             "center_x": world.goal_center[0],
@@ -81,10 +81,10 @@ def test_valid_plan_passes(world, gt, slots):
 
 def test_wrong_group_assignment_rejected(world, gt, slots):
     payload = _make_plan(world, gt, slots)
-    payload["steps"][0]["slot"] = "tidy_slot_green_top_0"
+    payload["steps"][0]["slot"] = "tidy_slot_red_lane_0"
     payload["steps"][0]["object"] = "a"
     payload["steps"][1]["object"] = "a"
-    payload["steps"][1]["slot"] = "tidy_slot_green_top_0"
+    payload["steps"][1]["slot"] = "tidy_slot_red_lane_0"
     plan = parse_plan(payload)
     with pytest.raises(PlanValidationError):
         plugin = DEFAULT_REGISTRY.get("align")
@@ -93,8 +93,8 @@ def test_wrong_group_assignment_rejected(world, gt, slots):
 
 def test_duplicate_slot_rejected(world, gt, slots):
     payload = _make_plan(world, gt, slots)
-    payload["steps"][1]["slot"] = "tidy_slot_green_top_0"
-    payload["steps"][3]["slot"] = "tidy_slot_green_top_0"
+    payload["steps"][1]["slot"] = "tidy_slot_blue_lane_0"
+    payload["steps"][3]["slot"] = "tidy_slot_blue_lane_0"
     plan = parse_plan(payload)
     with pytest.raises(PlanValidationError, match="duplicate slot"):
         plugin = DEFAULT_REGISTRY.get("align")
@@ -149,7 +149,7 @@ def test_pick_while_holding_rejected(world, gt, slots):
 def test_place_without_pick_rejected(world, gt, slots):
     payload = _make_plan(world, gt, slots)
     payload["steps"] = [
-        {"step_id": 0, "action": "place", "object": "a", "slot": "tidy_slot_green_top_0"},
+        {"step_id": 0, "action": "place", "object": "a", "slot": "tidy_slot_blue_lane_0"},
     ]
     payload["target_objects"] = ["a"]
     payload["goal_predicates"] = []

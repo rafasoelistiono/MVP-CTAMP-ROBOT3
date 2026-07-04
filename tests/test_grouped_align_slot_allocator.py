@@ -5,11 +5,11 @@ import math
 import pytest
 
 from world.builder import build_world_state
-from world.slot_allocator import allocate_grouped_align_slots, allocate_slots
+from world.slot_allocator import allocate_grouped_align_slots, allocate_slots, validate_slots
 from world.state import GroupedTidyConfig, ObstacleState, TidyGroup, WorldState
 
 
-CONTEXT_PATH = "contexts/examples/align_grouped_tidy_gang.md"
+CONTEXT_PATH = "contexts/examples/align_grouped_tidy_wall_world.md"
 
 
 @pytest.fixture
@@ -31,17 +31,17 @@ def test_grouped_slots_generated_for_all_12_objects(slots):
     assert len(slots) == 12
 
 
-def test_exactly_4_groups(slots, gt):
+def test_exactly_2_groups(slots, gt):
     group_ids = {group.id for group in gt.groups}
-    assert len(group_ids) == 4
+    assert group_ids == {"blue_lane", "red_lane"}
 
 
-def test_every_group_has_3_slots(slots, gt):
+def test_every_group_has_6_slots(slots, gt):
     for group in gt.groups:
         group_slots = [
             k for k in slots if k.startswith(f"tidy_slot_{group.id}_")
         ]
-        assert len(group_slots) == 3
+        assert len(group_slots) == 6
 
 
 def test_slots_inside_table_bounds(slots, world):
@@ -65,40 +65,32 @@ def test_slots_do_not_overlap(slots):
 
 
 def test_slots_not_inside_obstacle_region(slots, world):
-    obstacle_buffer = 0.13
-    for slot_id, (x, y, z) in slots.items():
-        for obstacle in world.obstacles:
-            clearance = math.dist((x, y), obstacle.pose[:2])
-            assert clearance >= obstacle.radius + obstacle_buffer, (
-                f"{slot_id} violates obstacle {obstacle.id} region"
-            )
+    validate_slots(slots, world, obstacle_buffer_m=0.13)
 
 
 def test_group_order_correct(slots, gt):
     group_ids = [group.id for group in gt.groups]
-    assert "green_top" in group_ids
-    assert "red_bottom" in group_ids
-    assert "yellow_top" in group_ids
-    assert "blue_bottom" in group_ids
+    assert group_ids == ["blue_lane", "red_lane"]
 
 
-def test_tidy_groups_stay_on_opposite_wall_sides(slots, world, gt):
-    left_wall_edge = min(obs.pose[0] - obs.radius for obs in world.obstacles)
-    right_wall_edge = max(obs.pose[0] + obs.radius for obs in world.obstacles)
-    left_groups = {"green_top", "red_bottom"}
-    right_groups = {"yellow_top", "blue_bottom"}
+def test_tidy_groups_stay_in_two_right_side_y_lanes(slots, world, gt):
+    wall = world.obstacles[0]
+    right_edge = wall.pose[0] + wall.size[0] / 2.0 + 0.13
+    lane_x = {"blue_lane": 0.20, "red_lane": 0.32}
     for group in gt.groups:
         xs = [
             pose[0]
             for slot_id, pose in slots.items()
             if slot_id.startswith(f"{gt.slot_prefix}_{group.id}_")
         ]
-        if group.id in left_groups:
-            assert max(xs) <= left_wall_edge + 0.02
-        elif group.id in right_groups:
-            assert min(xs) >= right_wall_edge
-        else:
-            pytest.fail(f"unexpected group {group.id}")
+        ys = [
+            pose[1]
+            for slot_id, pose in slots.items()
+            if slot_id.startswith(f"{gt.slot_prefix}_{group.id}_")
+        ]
+        assert min(xs) > right_edge
+        assert set(round(x, 2) for x in xs) == {lane_x[group.id]}
+        assert max(ys) - min(ys) == pytest.approx(0.375)
 
 
 def test_baseline_align_slots_unchanged():

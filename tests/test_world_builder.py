@@ -7,7 +7,7 @@ import pytest
 from world.builder import ContextValidationError, build_world_state
 
 
-def context_text(variant: str = "group_obs", include_obstacles: bool = True) -> str:
+def context_text(variant: str = "ungroup_obs", include_obstacles: bool = True) -> str:
     obstacle_block = """
 ## obstacles
 - id: obstacle1
@@ -73,16 +73,6 @@ def test_build_context_with_obstacle(tmp_path):
     assert world.obstacles[0].fragile
 
 
-def test_build_context_without_obstacle(tmp_path):
-    world = build_world_state(
-        write_context(
-            tmp_path,
-            context_text("group_no_obs", include_obstacles=False),
-        )
-    )
-    assert world.obstacles == ()
-
-
 def test_unreachable_is_computed_not_trusted(tmp_path):
     world = build_world_state(write_context(tmp_path, context_text()))
     assert not world.object_by_id("cube_far").reachable
@@ -92,4 +82,3 @@ def test_missing_required_context_field_is_descriptive(tmp_path):
     broken = context_text().replace("- base_xy: [-0.4, 0.0]\n", "")
     with pytest.raises(ContextValidationError, match="base_xy"):
         build_world_state(write_context(tmp_path, broken))
-

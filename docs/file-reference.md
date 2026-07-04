@@ -9,11 +9,14 @@ Dokumen ini menjelaskan file source yang dipertahankan setelah cleanup.
 | `pyproject.toml` | Metadata package, dependencies, pytest config, dan CLI entrypoints. |
 | `.env.example` | Template credential/endpoint LLM; tidak berisi robot tuning. |
 | `contexts/examples/ungroup_obs_stack_cubes.md` | Context ungrouped obstacle untuk stack empat cube. |
+| `contexts/examples/ungroup_obs_pyramid_cubes.md` | Context ungrouped obstacle untuk pyramid enam cube. |
+| `contexts/examples/align_grouped_tidy_wall_world.md` | Context align grouped tidy dengan frontal wall obstacle. |
 | `configuration/profiles/models/panda.toml` | Model XML dan reference joint/pose Franka Panda. |
 | `configuration/profiles/runtime/conservative.toml` | Fine-tuning normal tanpa obstacle. |
 | `configuration/profiles/runtime/obstacle.toml` | Fine-tuning scene obstacle. |
-| `configuration/profiles/runtime/verification_strict.toml` | Contoh verifier tolerance yang lebih ketat. |
 | `task_plans/examples/ungroup_obs_stack_cubes.json` | TaskPlan stack obstacle siap dijalankan. |
+| `task_plans/examples/ungroup_obs_pyramid_cubes.json` | TaskPlan pyramid obstacle siap dijalankan. |
+| `task_plans/examples/align_grouped_tidy_wall_world.json` | TaskPlan align grouped tidy wall world siap dijalankan. |
 | `models/panda.xml` | Base MuJoCo model; generated scene dibuat dari file ini. |
 | `assets/` | Mesh visual dan collision yang direferensikan `panda.xml`. |
 
