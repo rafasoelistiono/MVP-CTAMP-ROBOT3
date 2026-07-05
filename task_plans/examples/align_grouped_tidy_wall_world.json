@@ -19,10 +19,10 @@
   ],
   "slot_config": {
     "type": "line",
-    "axis": "x",
-    "spacing_m": 0.085,
-    "row_y": 0.35,
-    "center_x": 0.0,
+    "axis": "y",
+    "spacing_m": 0.068,
+    "row_y": -0.01,
+    "center_x": 0.29,
     "base_z": 0.833
   },
   "steps": [

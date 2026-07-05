@@ -10,6 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 from task_planning.generator import (
     LLMSettings,
     PlanGenerationError,
+    build_task_prompt,
     parse_llm_json,
     request_task_plan,
 )
@@ -22,6 +23,7 @@ from telemetry.naming import (
     with_experiment_label,
 )
 from world.builder import build_world_state
+from world.slot_allocator import allocate_grouped_align_slots
 
 
 def _arguments() -> argparse.Namespace:
@@ -65,7 +67,11 @@ def main() -> int:
     if args.response_file:
         payload = parse_llm_json(args.response_file.read_text(encoding="utf-8"))
     else:
-        payload = request_task_plan(context_text, LLMSettings.from_env())
+        task_prompt = context_text
+        if world.grouped_tidy and world.grouped_tidy.enabled:
+            slots = allocate_grouped_align_slots(world, world.grouped_tidy)
+            task_prompt = build_task_prompt(context_text, world, slots)
+        payload = request_task_plan(task_prompt, LLMSettings.from_env())
 
     status = payload.get("status")
     if status in {"UNSAT", "NEEDS_CLARIFICATION"}:

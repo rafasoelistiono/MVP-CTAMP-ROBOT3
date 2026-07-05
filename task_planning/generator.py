@@ -151,3 +151,146 @@ def parse_llm_json(content: str | dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise PlanGenerationError("LLM output must be a JSON object")
     return payload
+
+
+def build_task_prompt(context_text: str, world: Any, slots: dict) -> str:
+    """Build a grounded prompt for the align_color_grouped_wall task.
+
+    Contains the full TaskPlan JSON schema, exact object/slot IDs, colors,
+    poses, constraints, and instructions for the LLM. No joint angles,
+    IK poses, trajectories, invented slots, or invented IDs.
+    """
+    from task_planning.types import SCHEMA_VERSION
+
+    gt = world.grouped_tidy
+    objects_data = {
+        obj.id: {
+            "pose": list(obj.pose),
+            "class": obj.cls,
+            "color": getattr(obj, "color", None) or "unknown",
+        }
+        for obj in world.objects
+    }
+    slots_data = {slot_id: list(slots[slot_id]) for slot_id in sorted(slots)}
+    groups_data = {
+        group.id: {"color": group.color, "objects": list(group.objects)}
+        for group in (gt.groups if gt and gt.enabled else ())
+    }
+    obstacles_data = {
+        obstacle.id: {
+            "pose": list(obstacle.pose),
+            "size": list(obstacle.size) if obstacle.size is not None else None,
+            "fragile": obstacle.fragile,
+        }
+        for obstacle in world.obstacles
+    }
+
+    example_objects: list[str] = []
+    example_slots: list[str] = []
+    if gt and gt.enabled:
+        for group in gt.groups[:2]:
+            object_id = group.objects[0]
+            matching_slots = sorted(
+                slot_id
+                for slot_id in slots
+                if slot_id.startswith(f"{gt.slot_prefix}_{group.id}_")
+            )
+            if matching_slots:
+                example_objects.append(object_id)
+                example_slots.append(matching_slots[-1])
+    if not example_objects:
+        example_objects = list(world.target_objects[:2])
+        example_slots = sorted(slots)[: len(example_objects)]
+
+    example_plan = {
+        "schema_version": SCHEMA_VERSION,
+        "task": "align",
+        "scene_id": world.scene_id,
+        "target_objects": example_objects,
+        "goal_predicates": [
+            {"name": "at", "args": [obj_id, slot_id]}
+            for obj_id, slot_id in zip(example_objects, example_slots)
+        ],
+        "slot_config": {
+            "type": "line",
+            "axis": gt.axis if gt else "x",
+            "spacing_m": gt.spacing if gt else 0.085,
+            "center_x": world.goal_center[0],
+            "row_y": world.goal_center[1],
+            "base_z": world.table_z_top + 0.033,
+        },
+        "steps": [
+            step
+            for index, (object_id, slot_id) in enumerate(
+                zip(example_objects, example_slots)
+            )
+            for step in (
+                {"step_id": index * 2, "action": "pick", "object": object_id},
+                {
+                    "step_id": index * 2 + 1,
+                    "action": "place",
+                    "object": object_id,
+                    "slot": slot_id,
+                },
+            )
+        ],
+        "constraints": {
+            "preserve_obstacles": True,
+            "flexible_order": True,
+            "grouped_tidy": True if gt else False,
+        },
+    }
+
+    n_steps = len(world.target_objects) * 2
+
+    prompt = f"""You are a task planner for a Franka Panda table-top manipulator.
+
+CONTEXT:
+{context_text}
+
+SCENE DATA:
+Objects:
+{json.dumps(objects_data, indent=2)}
+
+Slots:
+{json.dumps(slots_data, indent=2)}
+
+Obstacles:
+{json.dumps(obstacles_data, indent=2)}
+
+Tidy Groups:
+{json.dumps(groups_data, indent=2)}
+
+SCHEMA VERSION: {SCHEMA_VERSION}
+REQUIRED STEPS: {n_steps} (alternating pick/place for {len(world.target_objects)} cubes)
+
+TASKPLAN JSON SCHEMA:
+{{
+  "schema_version": "{SCHEMA_VERSION}",
+  "task": "align",
+  "scene_id": "<scene_id>",
+  "target_objects": ["<object_id>", ...],
+  "goal_predicates": [{{"name": "at", "args": ["<object_id>", "<slot_id>"]}}, ...],
+  "slot_config": {{"type": "line", "axis": "<x|y>", "spacing_m": <float>, "center_x": <float>, "row_y": <float>, "base_z": <float>}},
+  "steps": [{{"step_id": <int>, "action": "pick"|"place", "object": "<object_id>", "slot": "<slot_id>"}}],
+  "constraints": {{"preserve_obstacles": true, "flexible_order": true, "grouped_tidy": true}}
+}}
+
+RULES:
+1. Use ONLY object IDs and slot IDs listed above.
+2. Each step must be exactly "pick" or "place".
+3. Alternate pick/place starting with pick. Exactly {n_steps} steps.
+4. Each object picked and placed exactly once.
+5. Each slot used at most once.
+6. Assign objects to slots matching their color group (blue to blue_lane, red to red_lane).
+7. Fill deep lane slots before corridor-near slots (higher y-index first for y-axis).
+8. Minimize wall crossings. Prefer routing around the right side of the wall.
+9. Do NOT invent joint angles, IK poses, trajectories, slot IDs, or object IDs.
+10. Output valid JSON only. No Markdown, no comments.
+
+EXAMPLE (complete valid structure for 2 cubes):
+{json.dumps(example_plan, indent=2)}
+
+Now produce the complete TaskPlan JSON for all {len(world.target_objects)} cubes:
+"""
+    return prompt

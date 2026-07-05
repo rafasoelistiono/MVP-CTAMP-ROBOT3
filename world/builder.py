@@ -160,6 +160,7 @@ def _parse_grouped_tidy(
     sections: dict[str, Any],
     targets: tuple[str, ...],
     object_ids: set[str],
+    objects_by_id: dict[str, Any] | None = None,
 ) -> GroupedTidyConfig | None:
     raw = sections.get("grouped_tidy")
     if not raw or not isinstance(raw, dict):
@@ -211,6 +212,18 @@ def _parse_grouped_tidy(
                 f"tidy_groups[{idx}] references unknown objects: "
                 + ", ".join(unknown)
             )
+        if objects_by_id is not None:
+            wrong_color = sorted(
+                oid for oid in objects
+                if objects_by_id.get(oid) is not None
+                and objects_by_id[oid].get("color") is not None
+                and str(objects_by_id[oid]["color"]).strip().lower() != color.strip().lower()
+            )
+            if wrong_color:
+                raise ContextValidationError(
+                    f"tidy_groups[{idx}] color={color!r} but objects have wrong color: "
+                    + ", ".join(wrong_color)
+                )
         unseen = sorted(set(objects) - set(targets))
         if unseen:
             raise ContextValidationError(
@@ -349,6 +362,7 @@ def build_world_state(path: str | Path) -> WorldState:
         raise ContextValidationError("task.description must not be empty")
 
     base_xy = _tuple_numbers(robot["base_xy"], 2, "robot.base_xy")
+    base_z = float(robot.get("base_z", 0.80))
     reach_min = float(robot["reach_min_xy"])
     reach_max = float(robot["reach_max_xy"])
     if not 0 <= reach_min < reach_max:
@@ -446,6 +460,7 @@ def build_world_state(path: str | Path) -> WorldState:
                 reachable=reachable,
                 near_obstacle=near_obstacle,
                 rgba=_object_rgba(raw, f"objects[{index}]"),
+                color=str(raw.get("color", "")).strip().lower() or None,
             )
         )
 
@@ -517,7 +532,8 @@ def build_world_state(path: str | Path) -> WorldState:
                 + ", ".join(non_fragile)
             )
 
-    grouped_tidy = _parse_grouped_tidy(sections, targets, object_ids)
+    raw_by_id = {str(raw["id"]): raw for raw in object_rows}
+    grouped_tidy = _parse_grouped_tidy(sections, targets, object_ids, raw_by_id)
     challenge = _parse_challenge(sections, obstacle_ids)
 
     return WorldState(
@@ -547,4 +563,5 @@ def build_world_state(path: str | Path) -> WorldState:
         allowed_predicates=allowed,
         grouped_tidy=grouped_tidy,
         challenge=challenge,
+        robot_base_z=base_z,
     )

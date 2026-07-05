@@ -131,15 +131,4 @@ def _format_console(row: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-def _write_csv(row: dict[str, Any]) -> None:
-    path = Path(_CSV_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    exists = path.exists()
-    with path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=_FIELDNAMES)
-        if not exists:
-            writer.writeheader()
-        writer.writerow({key: row.get(key, "") for key in _FIELDNAMES})
-
-
 atexit.register(flush)

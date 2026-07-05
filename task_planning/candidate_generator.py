@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+from itertools import permutations
 from typing import Sequence
 
 from .types import SCHEMA_VERSION, SlotConfig, Step, TaskPlan
@@ -22,6 +23,7 @@ def generate_align_candidates(
             ("grouped_nearest_first", generate_grouped_tidy_nearest_first_plan),
             ("grouped_obstacle_aware", generate_grouped_tidy_obstacle_aware_plan),
             ("grouped_nearest_to_slot", generate_grouped_tidy_nearest_to_slot_plan),
+            ("grouped_deep_first", generate_grouped_tidy_deep_first_plan),
             ("grouped_random", generate_grouped_tidy_random_plan),
         ]
     else:
@@ -226,6 +228,42 @@ def generate_grouped_tidy_random_plan(
     return _build_grouped_align_plan(world, ordered_ids, slots, gt, "grouped_random")
 
 
+def generate_grouped_tidy_deep_first_plan(
+    world: WorldState,
+    slots: dict[str, tuple[float, float, float]],
+) -> TaskPlan:
+    gt = world.grouped_tidy
+    if not gt or not gt.enabled:
+        return None  # type: ignore[return-value]
+    ordered_ids: list[str] = []
+    for group in gt.groups:
+        group_slot_ids = sorted(
+            slot_id
+            for slot_id in slots
+            if slot_id.startswith(f"{gt.slot_prefix}_{group.id}_")
+        )
+        assignment = _optimal_group_assignment(
+            world,
+            tuple(group.objects),
+            group_slot_ids,
+            slots,
+        )
+        ordered_ids.extend(
+            sorted(
+                group.objects,
+                key=lambda object_id: group_slot_ids.index(assignment[object_id]),
+                reverse=True,
+            )
+        )
+    return _build_grouped_align_plan(
+        world,
+        ordered_ids,
+        slots,
+        gt,
+        "grouped_deep_first",
+    )
+
+
 def _build_grouped_align_plan(
     world: WorldState,
     ordered_object_ids: list[str],
@@ -239,9 +277,14 @@ def _build_grouped_align_plan(
         group_slot_ids = sorted(
             k for k in slots.keys() if k.startswith(f"{gt.slot_prefix}_{group.id}_")
         )
-        for i, obj_id in enumerate(group.objects):
-            if i < len(group_slot_ids):
-                object_to_slot[obj_id] = group_slot_ids[i]
+        object_to_slot.update(
+            _optimal_group_assignment(
+                world,
+                tuple(group.objects),
+                group_slot_ids,
+                slots,
+            )
+        )
 
     steps: list[Step] = []
     for idx, object_id in enumerate(ordered_object_ids):
@@ -280,6 +323,39 @@ def _build_grouped_align_plan(
             "generation_method": method,
         },
     )
+
+
+def _optimal_group_assignment(
+    world: WorldState,
+    object_ids: tuple[str, ...],
+    slot_ids: list[str],
+    slots: dict[str, tuple[float, float, float]],
+) -> dict[str, str]:
+    """Find the minimum-distance same-color assignment (at most 6! here)."""
+    if len(object_ids) != len(slot_ids):
+        raise PlanValidationError(
+            "grouped align assignment requires equal object and slot counts"
+        )
+    if len(object_ids) > 8:
+        raise PlanValidationError(
+            "grouped align exhaustive assignment is bounded to eight objects"
+        )
+    best_cost = float("inf")
+    best_slots: tuple[str, ...] | None = None
+    for candidate_slots in permutations(slot_ids):
+        cost = 0.0
+        for object_id, slot_id in zip(object_ids, candidate_slots):
+            obj = world.object_by_id(object_id)
+            if obj is None:
+                cost = float("inf")
+                break
+            cost += math.dist(obj.pose[:2], slots[slot_id][:2])
+        if cost < best_cost:
+            best_cost = cost
+            best_slots = candidate_slots
+    if best_slots is None:
+        raise PlanValidationError("grouped align assignment has no feasible mapping")
+    return dict(zip(object_ids, best_slots))
 
 
 def _target_objects_with_poses(

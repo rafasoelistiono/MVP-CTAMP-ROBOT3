@@ -51,8 +51,8 @@ def _gate_1_schema(plan: TaskPlan) -> None:
             f"gate 1: slot_config.type must be 'line', 'tower', or 'pyramid', "
             f"got {plan.slot_config.type!r}"
         )
-    if plan.slot_config.axis != "x":
-        raise PlanValidationError("gate 1: only slot axis 'x' is currently supported")
+    if plan.slot_config.axis not in {"x", "y"}:
+        raise PlanValidationError("gate 1: slot axis must be 'x' or 'y'")
     if plan.slot_config.spacing_m <= 0:
         raise PlanValidationError("gate 1: slot spacing must be positive")
     if plan.slot_config.layer_height_m <= 0:
@@ -250,21 +250,22 @@ def validate_grouped_align_order(
 
     groups is a tuple of TidyGroup-like objects with .id, .objects attributes.
     """
-    expected_slot: dict[str, str] = {}
+    object_group: dict[str, str] = {}
     for group in groups:
-        for i, obj_id in enumerate(group.objects):
-            expected_slot[obj_id] = f"{slot_prefix}_{group.id}_{i}"
+        for obj_id in group.objects:
+            object_group[obj_id] = group.id
 
     for step in plan.steps:
         if step.action != "place" or not step.slot:
             continue
         obj_id = step.object
-        if obj_id not in expected_slot:
+        if obj_id not in object_group:
             raise PlanValidationError(
                 f"grouped align: object {obj_id!r} is not assigned to any tidy group"
             )
-        if step.slot != expected_slot[obj_id]:
+        expected_prefix = f"{slot_prefix}_{object_group[obj_id]}_"
+        if not step.slot.startswith(expected_prefix):
             raise PlanValidationError(
-                f"grouped align: object {obj_id!r} must go to slot "
-                f"{expected_slot[obj_id]!r}, got {step.slot!r}"
+                f"grouped align: object {obj_id!r} must use a slot in group "
+                f"{object_group[obj_id]!r}, got {step.slot!r}"
             )

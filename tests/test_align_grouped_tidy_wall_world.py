@@ -40,6 +40,8 @@ def _scene_root(world):
             world.table_x_range[1] - world.table_x_range[0],
             world.table_y_range[1] - world.table_y_range[0],
         ),
+        base_xy=world.robot_base_xy,
+        base_z=world.robot_base_z,
     )
     return ET.parse(path).getroot()
 
@@ -57,22 +59,23 @@ def test_context_layout_invariants(world):
     half_x, half_y, _ = (value / 2.0 for value in wall.size)
     group_y = min(group.center[1] for group in world.grouped_tidy.groups)
     assert world.robot_base_xy[1] < wall.pose[1] < group_y
-    assert world.robot_base_xy[1] == pytest.approx(-0.86)
+    assert world.robot_base_xy[1] == pytest.approx(-0.34)
+    assert world.robot_base_z == pytest.approx(0.88)
     assert world.robot_reach_max == pytest.approx(1.50)
-    assert abs(world.robot_base_xy[0] - wall.pose[0]) <= 0.10
+    assert abs(world.robot_base_xy[0] - wall.pose[0]) <= 0.20
     assert wall.id == "frontal_tall_wall"
     assert wall.size == pytest.approx((0.08, 0.20, 1.60))
     assert wall.pose[2] + wall.size[2] / 2.0 >= 2.30
     assert world.grouped_tidy.axis == "y"
-    assert world.grouped_tidy.spacing == pytest.approx(0.075)
+    assert world.grouped_tidy.spacing == pytest.approx(0.068)
     assert world.goal_center[0] > wall.pose[0] + half_x + 0.13
-    assert world.goal_center[1] > wall.pose[1] + half_y
+    assert world.goal_center[0] > wall.pose[0] + half_x
     assert world.challenge.type == "frontal_tall_wall"
     assert world.challenge.wall_blocks_direct_path
     assert world.challenge.side_corridors_required
     assert {group.color for group in world.grouped_tidy.groups} == {"blue", "red"}
-    assert {group.center[1] for group in world.grouped_tidy.groups} == {0.34}
-    assert {group.center[0] for group in world.grouped_tidy.groups} == {0.20, 0.32}
+    assert {group.center[1] for group in world.grouped_tidy.groups} == {-0.01}
+    assert {group.center[0] for group in world.grouped_tidy.groups} == {0.22, 0.36}
     assert all(group.center[0] > wall.pose[0] + half_x + 0.13 for group in world.grouped_tidy.groups)
 
 
@@ -96,8 +99,8 @@ def test_objects_are_scattered_behind_and_around_wall(world):
     assert len(left) == 0
     assert len(right) == len(world.objects)
     assert min(y_values) <= world.table_y_range[0] + 0.15
-    assert max(y_values) >= 0.55
-    assert max(y_values) - min(y_values) >= 1.35
+    assert max(y_values) >= 0.18
+    assert max(y_values) - min(y_values) >= 1.10
     assert len({round(y, 2) for y in y_values}) == len(world.objects)
     for obj in world.objects:
         assert obj.reachable
@@ -108,7 +111,7 @@ def test_objects_are_scattered_behind_and_around_wall(world):
             assert math.dist(obj.pose[:2], other.pose[:2]) >= 0.066
 
 
-def test_tidy_slots_are_behind_wall_and_safe(world, slots):
+def test_tidy_slots_use_right_wall_corridor_and_are_safe(world, slots):
     wall = world.obstacles[0]
     half_x, half_y, _ = (value / 2.0 for value in wall.size)
     expected = {
@@ -127,10 +130,9 @@ def test_tidy_slots_are_behind_wall_and_safe(world, slots):
     }
     assert set(slots) == expected
     validate_slots(slots, world, obstacle_buffer_m=0.13)
-    assert {round(pose[0], 2) for pose in slots.values()} == {0.20, 0.32}
-    assert max(pose[1] for pose in slots.values()) - min(pose[1] for pose in slots.values()) == pytest.approx(0.375)
+    assert {round(pose[0], 2) for pose in slots.values()} == {0.22, 0.36}
+    assert max(pose[1] for pose in slots.values()) - min(pose[1] for pose in slots.values()) == pytest.approx(0.34)
     for pose in slots.values():
-        assert pose[1] > wall.pose[1] + half_y
         assert pose[0] > wall.pose[0] + half_x + 0.13
         assert not _inside_inflated_wall(pose, wall)
 
@@ -156,12 +158,12 @@ def test_scene_wall_is_static_box_collision_and_tall(world):
     )
 
 
-def test_scene_arm_is_moved_back_for_wall_world(world):
+def test_scene_arm_uses_canonical_context_base(world):
     root = _scene_root(world)
     link0 = root.find("./worldbody/body[@name='link0']")
     assert link0 is not None
     assert [float(value) for value in link0.get("pos").split()] == pytest.approx(
-        [-0.4, -0.18, 0.8]
+        [*world.robot_base_xy, world.robot_base_z]
     )
 
 
@@ -183,6 +185,8 @@ def test_initial_arm_pose_does_not_touch_wall(world):
             world.table_x_range[1] - world.table_x_range[0],
             world.table_y_range[1] - world.table_y_range[0],
         ),
+        base_xy=world.robot_base_xy,
+        base_z=world.robot_base_z,
     )
     model = mujoco.MjModel.from_xml_path(str(root_path))
     data = mujoco.MjData(model)

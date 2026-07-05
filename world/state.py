@@ -23,6 +23,7 @@ class ObjectState:
     reachable: bool
     near_obstacle: bool
     rgba: tuple[float, float, float, float] | None = None
+    color: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class WorldState:
     goal_area_size_xy: tuple[float, float] = (0.52, 0.40)
     grouped_tidy: GroupedTidyConfig | None = None
     challenge: ChallengeConfig | None = None
+    robot_base_z: float = 0.80
 
     def object_by_id(self, oid: str) -> ObjectState | None:
         return next((obj for obj in self.objects if obj.id == oid), None)

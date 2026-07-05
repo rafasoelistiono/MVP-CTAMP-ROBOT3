@@ -8,8 +8,8 @@
 - x_range: [-0.85, 0.85]
 - y_range: [-1.10, 0.90]
 - z_top: 0.80
-- goal_center: [0.26, 0.34, 0.833]
-- goal_area_size_xy: [0.34, 0.47]
+- goal_center: [0.29, -0.01, 0.833]
+- goal_area_size_xy: [0.30, 0.46]
 
 ## geometry
 - cube_size_xyz: [0.066, 0.066, 0.066]
@@ -18,80 +18,81 @@
 - id: panda_left
 - reach_min_xy: 0.25
 - reach_max_xy: 1.50
-- base_xy: [0.00, -0.86]
+- base_xy: [-0.20, -0.34]
+- base_z: 0.88
 - capabilities: [pick, place]
 
 ## objects
 - id: a
   class: cube
   color: blue
-  pose: [0.24, -0.96, 0.833]
+  pose: [0.18, -0.96, 0.833]
   reachable: true
   near_obstacle: false
 - id: b
   class: cube
   color: red
-  pose: [0.44, -0.82, 0.833]
+  pose: [0.38, -0.80, 0.833]
   reachable: true
   near_obstacle: false
 - id: c
   class: cube
   color: blue
-  pose: [0.30, -0.68, 0.833]
+  pose: [0.18, -0.70, 0.833]
   reachable: true
   near_obstacle: false
 - id: d
   class: cube
   color: red
-  pose: [0.52, -0.54, 0.833]
+  pose: [0.48, -0.62, 0.833]
   reachable: true
   near_obstacle: false
 - id: e
   class: cube
   color: blue
-  pose: [0.24, -0.40, 0.833]
+  pose: [0.18, -0.48, 0.833]
   reachable: true
   near_obstacle: false
 - id: f
   class: cube
   color: red
-  pose: [0.44, -0.26, 0.833]
+  pose: [0.40, -0.42, 0.833]
   reachable: true
   near_obstacle: false
 - id: g
   class: cube
   color: blue
-  pose: [0.34, -0.12, 0.833]
+  pose: [0.22, -0.24, 0.833]
   reachable: true
   near_obstacle: false
 - id: h
   class: cube
   color: red
-  pose: [0.52, 0.02, 0.833]
+  pose: [0.54, -0.23, 0.833]
   reachable: true
   near_obstacle: false
 - id: i
   class: cube
   color: blue
-  pose: [0.22, 0.16, 0.833]
+  pose: [0.18, 0.02, 0.833]
   reachable: true
   near_obstacle: false
 - id: j
   class: cube
   color: red
-  pose: [0.38, 0.30, 0.833]
+  pose: [0.46, -0.04, 0.833]
   reachable: true
   near_obstacle: false
 - id: k
   class: cube
   color: blue
-  pose: [0.28, 0.44, 0.833]
+  pose: [0.18, 0.25, 0.833]
   reachable: true
   near_obstacle: false
 - id: l
   class: cube
   color: red
-  pose: [0.20, 0.58, 0.833]
+  pose: [0.36, 0.15, 0.833]
   reachable: true
   near_obstacle: false
 
@@ -106,7 +107,7 @@
 ## task
 - name: align
 - target_objects: [a, b, c, d, e, f, g, h, i, j, k, l]
-- description: Move 12 messy red/blue cubes spread from negative to positive y along the right side of a frontal tall wall into two ordered tidy color lanes without using the left side of the wall.
+- description: Move 12 scattered red/blue cubes through the right-side corridor of a frontal tall wall into two ordered tidy color lanes without using the left side of the wall.
 
 ## constraints
 - preserve_obstacles: true
@@ -118,18 +119,18 @@
 - require_ordered: true
 - slot_prefix: tidy_slot
 - axis: y
-- spacing: 0.075
+- spacing: 0.068
 - row_spacing: 0.110
 
 ## tidy_groups
 - id: blue_lane
   color: blue
   objects: [a, c, e, g, i, k]
-  center: [0.20, 0.34, 0.833]
+  center: [0.22, -0.01, 0.833]
 - id: red_lane
   color: red
   objects: [b, d, f, h, j, l]
-  center: [0.32, 0.34, 0.833]
+  center: [0.36, -0.01, 0.833]
 
 ## challenge
 - type: frontal_tall_wall

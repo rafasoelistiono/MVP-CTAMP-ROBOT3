@@ -24,6 +24,67 @@ DEFAULT_ROBOT_BODIES = (
 )
 
 
+def resolve_obstacle_body_ids(
+    model: mujoco.MjModel,
+    obstacle_ids: Iterable[str],
+    *,
+    strict: bool = True,
+) -> dict[str, int]:
+    """Resolve semantic obstacle IDs to MuJoCo body IDs from WorldState."""
+    result: dict[str, int] = {}
+    missing: list[str] = []
+    for name in obstacle_ids:
+        try:
+            body_id = model.body(name).id
+            result[name] = body_id
+        except KeyError:
+            missing.append(name)
+    if strict and missing:
+        raise ValueError(
+            "semantic obstacle bodies missing from MuJoCo model: "
+            + ", ".join(sorted(missing))
+        )
+    return result
+
+
+def tall_box_obstacle_bounds_xy(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    obstacle_body_ids: Iterable[int],
+    *,
+    min_half_height: float = 0.25,
+) -> tuple[float, float, float, float] | None:
+    """Return the XY union of semantic tall box obstacles."""
+    mujoco.mj_forward(model, data)
+    bounds: list[tuple[float, float, float, float]] = []
+    for body_id in obstacle_body_ids:
+        geom_start = int(model.body_geomadr[int(body_id)])
+        geom_count = int(model.body_geomnum[int(body_id)])
+        for geom_id in range(geom_start, geom_start + geom_count):
+            if int(model.geom_type[geom_id]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+                continue
+            size = model.geom_size[geom_id]
+            if float(size[2]) < min_half_height:
+                continue
+            center = data.geom_xpos[geom_id]
+            bounds.append(
+                (
+                    float(center[0] - size[0]),
+                    float(center[0] + size[0]),
+                    float(center[1] - size[1]),
+                    float(center[1] + size[1]),
+                )
+            )
+    if not bounds:
+        return None
+    return (
+        min(item[0] for item in bounds),
+        max(item[1] for item in bounds),
+        min(item[2] for item in bounds),
+        max(item[3] for item in bounds),
+    )
+
+
 @dataclass(frozen=True)
 class CollisionReport:
     valid: bool
@@ -55,13 +116,16 @@ class CollisionPolicy:
         self,
         model: mujoco.MjModel,
         robot_body_names: Optional[Sequence[str]] = None,
+        obstacle_body_names: Optional[Sequence[str]] = None,
         obstacle_penetration_tolerance: Optional[float] = None,
         safety_config: SafetyConfig | None = None,
     ) -> None:
         safety = safety_config or get_active_runtime_config().safety
         self.model = model
         self.robot_body_names: Set[str] = set(robot_body_names or DEFAULT_ROBOT_BODIES)
+        self.obstacle_body_names: Set[str] = set(obstacle_body_names or ())
         self.ignored_body_names: Set[str] = set()
+        self._attached_body_names: Set[str] = set()
         self.obstacle_penetration_tolerance = (
             safety.obstacle_contact_tolerance_m
             if obstacle_penetration_tolerance is None
@@ -77,6 +141,7 @@ class CollisionPolicy:
         self.robot_geom_ids: Set[int] = set()
         self.env_geom_ids: Set[int] = set()
         self.env_body_ids: Set[int] = set()
+        self.obstacle_geom_ids: Set[int] = set()
         self.robot_body_ids: Set[int] = {
             self.model.body(name).id
             for name in self.robot_body_names
@@ -88,10 +153,30 @@ class CollisionPolicy:
         self.ignored_body_names = set(body_names or [])
         self.refresh()
 
+    def attach_body(self, body_name: str) -> None:
+        """Mark a body as attached to the robot (e.g. held cube).
+
+        Attached bodies are treated as part of the robot for collision
+        checking. Robot-attached contacts are exempt; attached-environment
+        contacts are still checked.
+        """
+        if body_name not in self.robot_body_names:
+            self.robot_body_names.add(body_name)
+            self._attached_body_names.add(body_name)
+            self.refresh()
+
+    def detach_body(self, body_name: str) -> None:
+        """Remove a body from the attached set and restore it as environment."""
+        if body_name in self._attached_body_names:
+            self._attached_body_names.discard(body_name)
+            self.robot_body_names.discard(body_name)
+            self.refresh()
+
     def refresh(self) -> None:
         self.robot_geom_ids = set()
         self.env_geom_ids = set()
         self.env_body_ids = set()
+        self.obstacle_geom_ids = set()
 
         for geom_id in range(self.model.ngeom):
             body_id = int(self.model.geom_bodyid[geom_id])
@@ -108,6 +193,8 @@ class CollisionPolicy:
             elif body_name not in self.ignored_body_names:
                 self.env_geom_ids.add(geom_id)
                 self.env_body_ids.add(body_id)
+                if self._is_obstacle(body_name):
+                    self.obstacle_geom_ids.add(geom_id)
 
     def check_contacts(self, data: mujoco.MjData) -> CollisionReport:
         for contact_index in range(data.ncon):
@@ -141,7 +228,14 @@ class CollisionPolicy:
                         continue
 
                 if env_body is not None and self._is_table(env_body):
-                    if self._is_finger_body(robot_body) and penetration <= self.table_finger_penetration_tolerance:
+                    support_contact = (
+                        self._is_finger_body(robot_body)
+                        or robot_body in self._attached_body_names
+                    )
+                    if (
+                        support_contact
+                        and penetration <= self.table_finger_penetration_tolerance
+                    ):
                         continue
 
                 if env_body is not None and self._is_obstacle(env_body):
@@ -175,6 +269,55 @@ class CollisionPolicy:
             return 1.0
         return best
 
+    def minimum_obstacle_geom_clearance(
+        self,
+        data: mujoco.MjData,
+        *,
+        distance_limit: float = 0.10,
+    ) -> float:
+        if not self.robot_geom_ids or not self.obstacle_geom_ids:
+            return distance_limit
+        best = float(distance_limit)
+        measured_pair = False
+        for robot_geom in self.robot_geom_ids:
+            body_name = self._body_name_for_geom(robot_geom) or ""
+            if body_name.endswith(("link0", "link1")):
+                continue
+            for obstacle_geom in self.obstacle_geom_ids:
+                collision_enabled = bool(
+                    int(self.model.geom_contype[robot_geom])
+                    & int(self.model.geom_conaffinity[obstacle_geom])
+                ) or bool(
+                    int(self.model.geom_contype[obstacle_geom])
+                    & int(self.model.geom_conaffinity[robot_geom])
+                )
+                if not collision_enabled:
+                    continue
+                # MuJoCo reports zero from mj_geomDistance for mesh pairs even
+                # when they are separated. Contacts still validate Panda mesh
+                # collisions; reserve the distance margin for supported pairs
+                # such as an attached box-shaped cube against the wall.
+                if (
+                    int(self.model.geom_type[robot_geom])
+                    == int(mujoco.mjtGeom.mjGEOM_MESH)
+                    or int(self.model.geom_type[obstacle_geom])
+                    == int(mujoco.mjtGeom.mjGEOM_MESH)
+                ):
+                    continue
+                distance = float(
+                    mujoco.mj_geomDistance(
+                        self.model,
+                        data,
+                        robot_geom,
+                        obstacle_geom,
+                        distance_limit,
+                        None,
+                    )
+                )
+                measured_pair = True
+                best = min(best, distance)
+        return best if measured_pair else float(distance_limit)
+
     def _body_name_for_geom(self, geom_id: int) -> Optional[str]:
         body_id = int(self.model.geom_bodyid[geom_id])
         return mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body_id)
@@ -204,6 +347,8 @@ class CollisionPolicy:
         return body_name.lower() == "table"
 
     def _is_obstacle(self, body_name: str) -> bool:
+        if body_name in self.obstacle_body_names:
+            return True
         lower = body_name.lower()
         return any(
             token in lower

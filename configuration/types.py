@@ -10,10 +10,14 @@ class ModelConfig:
     xml_path: Path
     active_arm: str = "left"
     base_xy: tuple[float, float] = (-0.4, 0.0)
+    base_z: float = 0.80
     home_q: tuple[float, ...] = (0.0, 0.0, 0.0, -1.5708, 0.0, 1.5708, -0.7854)
     grasp_ready_q: tuple[float, ...] = (0.0, 0.529, 0.0, -1.98, 0.0, 2.495, -0.75)
     elbow_up_q: tuple[float, ...] = (0.0, 0.20, 0.0, -2.40, 0.0, 2.60, -0.75)
+    wall_right_q: tuple[float, ...] = (2.827, -1.553, -1.694, -1.797, -1.581, 1.695, -1.079)
     desired_tool_z: tuple[float, float, float] = (0.0, 0.0, -1.0)
+    desired_tool_x: tuple[float, float, float] | None = None
+    obstacle_body_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,8 @@ class MotionConfig:
     goal_tolerance: float = 0.001
     settle_steps_per_waypoint: int = 14
     final_settle_steps: int = 40
+    valid_state_sampler: str | None = None
+    optimization_planner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,7 @@ class SafetyConfig:
     finger_movable_contact_tolerance_m: float = 0.018
     table_finger_contact_tolerance_m: float = 0.005
     allow_movable_object_contact: bool = False
+    planning_obstacle_clearance_m: float = 0.012
 
 
 @dataclass(frozen=True)
@@ -159,13 +166,21 @@ class RuntimeConfig:
             errors.append("name must not be empty")
         if self.model.active_arm not in {"left", "right"}:
             errors.append("model.active_arm must be left or right")
+        if not 0.0 < self.model.base_z < 2.5:
+            errors.append("model.base_z must be in (0, 2.5)")
         for field_name, values, expected in (
             ("model.home_q", self.model.home_q, 7),
             ("model.grasp_ready_q", self.model.grasp_ready_q, 7),
             ("model.elbow_up_q", self.model.elbow_up_q, 7),
+            ("model.wall_right_q", self.model.wall_right_q, 7),
         ):
             if len(values) != expected:
                 errors.append(f"{field_name} must contain {expected} values")
+        if self.model.desired_tool_x is not None:
+            if len(self.model.desired_tool_x) != 3:
+                errors.append("model.desired_tool_x must contain 3 values")
+            elif sum(value * value for value in self.model.desired_tool_x) <= 1e-12:
+                errors.append("model.desired_tool_x must be non-zero")
         if self.ik.backend not in {"auto", "pinocchio", "mujoco_dls"}:
             errors.append("ik.backend must be auto, pinocchio, or mujoco_dls")
         if not 0 < self.ik.plan_position_error_m <= 0.030:
@@ -176,6 +191,15 @@ class RuntimeConfig:
             errors.append("IK candidate and attempt limits must be positive")
         if self.motion.time_limit_s <= 0 or self.motion.waypoint_step <= 0:
             errors.append("motion time limit and waypoint step must be positive")
+        if self.motion.valid_state_sampler not in {None, "uniform", "obstacle_based"}:
+            errors.append(
+                "motion.valid_state_sampler must be uniform, obstacle_based, or unset"
+            )
+        if self.motion.optimization_planner is not None and (
+            self.motion.optimization_planner.strip().lower()
+            not in {"rrtconnect", "rrt_connect", "rrtstar", "rrt_star", "bitstar", "bit_star", "bit*", "prmstar", "prm_star", "prm*", "kpiece", "kpiece1", "est"}
+        ):
+            errors.append("motion.optimization_planner is not a supported OMPL planner")
         if not (
             0
             < self.safety.min_pick_obstacle_clearance_m
@@ -184,6 +208,8 @@ class RuntimeConfig:
             errors.append("obstacle clearances must satisfy 0 < min <= cautious")
         if self.safety.target_obstacle_buffer_m < 0:
             errors.append("safety.target_obstacle_buffer_m must be non-negative")
+        if self.safety.planning_obstacle_clearance_m < 0:
+            errors.append("safety.planning_obstacle_clearance_m must be non-negative")
         if not 0 < self.grasp.open_grip_m <= 0.05:
             errors.append("grasp.open_grip_m must be in (0, 0.05]")
         if (

@@ -9,7 +9,11 @@ import numpy as np
 
 from configuration import get_active_runtime_config
 
-from .collision import CollisionPolicy
+from .collision import (
+    CollisionPolicy,
+    resolve_obstacle_body_ids,
+    tall_box_obstacle_bounds_xy,
+)
 from .trace import log_event
 from .ik_diagnostics import (
     IKAttemptResult,
@@ -86,6 +90,11 @@ _plan_data = mujoco.MjData(model)
 HOME = np.asarray(CONFIG.model.home_q, dtype=float)
 GRASP_READY = np.asarray(CONFIG.model.grasp_ready_q, dtype=float)
 _DESIRED_Z = np.asarray(CONFIG.model.desired_tool_z, dtype=float)
+_DESIRED_X = (
+    None
+    if CONFIG.model.desired_tool_x is None
+    else np.asarray(CONFIG.model.desired_tool_x, dtype=float)
+)
 GRASP_OFFSET = CONFIG.grasp.grasp_offset_m
 APPROACH_CLEARANCE = CONFIG.grasp.approach_clearance_m
 OPEN_GRIP = CONFIG.grasp.open_grip_m
@@ -96,6 +105,7 @@ CAUTIOUS_OBSTACLE_CLEARANCE = CONFIG.safety.cautious_obstacle_clearance_m
 # Used as a secondary IK seed when the primary converges to an elbow-down
 # configuration (joint2 > ~0.55) that would place link2 below z=0.80.
 _ELBOW_UP_REF = np.asarray(CONFIG.model.elbow_up_q, dtype=float)
+_WALL_RIGHT_REF = np.asarray(CONFIG.model.wall_right_q, dtype=float)
 
 # When fragile objects are present, never use IK fallback for physical motion.
 USE_IK_FALLBACK = CONFIG.ik.use_fallback
@@ -223,7 +233,11 @@ def set_active_arm(arm: str) -> None:
     arm_ranges = np.array([model.joint(n).range for n in arm_joint_names], dtype=float)
     arm_ctrl_adr = np.array([_joint_ctrl_index(n) for n in arm_joint_names], dtype=int)
     finger_ctrl_adr = _joint_ctrl_index(finger_joint_name)
-    _live_collision_policy = CollisionPolicy(model, robot_body_names=active_robot_body_names)
+    _live_collision_policy = CollisionPolicy(
+        model,
+        robot_body_names=active_robot_body_names,
+        obstacle_body_names=CONFIG.model.obstacle_body_names,
+    )
     log_event("ARM_SELECT", "OK", arm=ACTIVE_ARM, base_xy=[round(float(v), 4) for v in BASE_XY])
 
 
@@ -263,14 +277,22 @@ for i in range(model.nbody):
 # OPTIONAL OBSTACLE MONITORING
 # =============================
 
-_obstacle_ids: dict[str, int] = {}
-for _i in range(model.nbody):
-    _n = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, _i)
-    if _n and any(
-        token in _n.lower()
-        for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
-    ):
-        _obstacle_ids[_n] = model.body(_n).id
+_obstacle_ids = resolve_obstacle_body_ids(
+    model,
+    CONFIG.model.obstacle_body_names,
+)
+if not CONFIG.model.obstacle_body_names:
+    # Compatibility for direct backend imports that do not pass through the
+    # context-aware CLI. Production runs always provide semantic body names.
+    _obstacle_ids = {
+        name: model.body(name).id
+        for body_id in range(model.nbody)
+        if (name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id))
+        and any(
+            token in name.lower()
+            for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
+        )
+    }
 
 _obstacle_init_z: dict[str, float] = {}
 _obstacle_init_xy: dict[str, np.ndarray] = {}
@@ -338,31 +360,10 @@ def _min_obstacle_xy_distance(pos: np.ndarray) -> float:
 
 
 def _grouped_wall_bounds() -> tuple[float, float, float, float] | None:
-    wall_names = sorted(name for name in _obstacle_ids if name.startswith("tall_obs_"))
-    if len(wall_names) != 2:
-        return None
-    bounds = []
-    mujoco.mj_forward(model, data)
-    for name in wall_names:
-        body_id = _obstacle_ids[name]
-        geom_id = int(model.body_geomadr[body_id])
-        if int(model.geom_type[geom_id]) != int(mujoco.mjtGeom.mjGEOM_BOX):
-            return None
-        center = data.geom_xpos[geom_id]
-        size = model.geom_size[geom_id]
-        bounds.append(
-            (
-                float(center[0] - size[0]),
-                float(center[0] + size[0]),
-                float(center[1] - size[1]),
-                float(center[1] + size[1]),
-            )
-        )
-    return (
-        min(item[0] for item in bounds),
-        max(item[1] for item in bounds),
-        min(item[2] for item in bounds),
-        max(item[3] for item in bounds),
+    return tall_box_obstacle_bounds_xy(
+        model,
+        data,
+        _obstacle_ids.values(),
     )
 
 
@@ -374,78 +375,34 @@ def _grouped_wall_bypass_waypoints(
         return None
     min_x, max_x, min_y, max_y = bounds
     current = np.asarray(_ee_xyz(), dtype=float)
-    if current[1] >= min_y or float(target_xyz[1]) <= max_y:
+    side_tolerance = 0.02
+    current_behind = float(current[1]) < min_y - side_tolerance
+    target_behind = float(target_xyz[1]) < min_y - side_tolerance
+    current_front = float(current[1]) > max_y + side_tolerance
+    target_front = float(target_xyz[1]) > max_y + side_tolerance
+    current_right = float(current[0]) > max_x
+    target_right = float(target_xyz[0]) > max_x
+    current_across = not current_behind and (current_front or current_right)
+    target_across = not target_behind and (target_front or target_right)
+    if not (
+        (current_behind and target_across)
+        or (current_across and target_behind)
+    ):
         return None
 
     side = "right"
-    side_x = min_x - 0.455 if side == "left" else max_x + 0.10
-    bypass_z = max(float(current[2]), float(target_xyz[2]), 1.10)
-    right_back_z = 1.05
-    lateral: list[np.ndarray] = [
-        np.array([float(current[0]), float(current[1]), bypass_z])
-    ]
-    x_step = 0.05 if side_x >= float(current[0]) else -0.05
-    next_x = float(current[0]) + x_step
-    while (x_step > 0 and next_x < side_x) or (x_step < 0 and next_x > side_x):
-        lateral.append(np.array([next_x, float(current[1]), bypass_z]))
-        next_x += x_step
-    lateral.append(np.array([side_x, float(current[1]), bypass_z]))
-    back_y = max_y + (0.13 if side == "right" else 0.10)
-    crossing: list[np.ndarray] = []
-    next_y = float(current[1]) + 0.09
-    if side == "left":
-        while next_y < min(0.10, back_y):
-            crossing.append(np.array([side_x, next_y, bypass_z]))
-            next_y += 0.09
-        outer_x = side_x - 0.10
-        next_y = max(0.13, next_y)
-        while next_y < min(back_y, 0.40):
-            crossing.append(np.array([outer_x, next_y, bypass_z]))
-            next_y += 0.09
-    else:
-        while next_y < back_y:
-            if 0.08 <= next_y < max_y:
-                route_x = side_x + 0.20
-            elif next_y >= max_y:
-                route_x = side_x + 0.20
-            else:
-                route_x = side_x
-            route_z = right_back_z if next_y >= max_y else bypass_z
-            crossing.append(np.array([route_x, next_y, route_z]))
-            next_y += 0.09
-    back_x = side_x - 0.10 if side == "left" else side_x + 0.20
-    back = np.array(
-        [back_x, back_y, right_back_z if side == "right" else bypass_z]
+    corridor_x = max_x + 0.24
+    behind_y = min_y - 0.12
+    front_y = max_y + 0.12
+    bypass_z = 1.15
+    behind_gateway = np.array([corridor_x, behind_y, bypass_z])
+    front_gateway = np.array([corridor_x, front_y, bypass_z])
+    target_hover = np.array(
+        [float(target_xyz[0]), float(target_xyz[1]), bypass_z]
     )
-    if side == "left":
-        target_x = float(target_xyz[0])
-        target_y = float(target_xyz[1])
-        corner_y = float(crossing[-1][1]) if crossing else float(current[1])
-        curve = (
-            np.array([back_x - 0.10, corner_y, bypass_z]),
-            np.array([back_x - 0.10, max_y + 0.05, bypass_z]),
-            np.array([side_x - 0.05, max_y + 0.10, bypass_z]),
-            np.array([target_x - 0.12, target_y - 0.05, bypass_z]),
-            np.array([target_x, target_y, bypass_z]),
-        )
-        return side, (*lateral, *crossing, *curve)
-    target_x = float(target_xyz[0])
-    target_y = float(target_xyz[1])
-    approach_x = target_x + 0.12
-    curve: list[np.ndarray] = [
-        np.array([back_x, target_y - 0.05, right_back_z]),
-    ]
-    next_x = back_x - 0.06
-    while next_x > approach_x:
-        curve.append(np.array([next_x, target_y - 0.05, right_back_z]))
-        next_x -= 0.06
-    curve.extend(
-        (
-            np.array([approach_x, target_y - 0.05, right_back_z]),
-            np.array([target_x, target_y, right_back_z]),
-        )
-    )
-    return side, (*lateral, *crossing, back, *curve)
+    if current_behind:
+        return side, (behind_gateway, front_gateway, target_hover)
+    return side, (front_gateway, behind_gateway, target_hover)
 
 
 def _object_lifted(obj: str) -> tuple[bool, float]:
@@ -455,6 +412,29 @@ def _object_lifted(obj: str) -> tuple[bool, float]:
     mujoco.mj_forward(model, data)
     z = float(data.xpos[body_id][2])
     return z > HELD_Z_THRESHOLD, z
+
+
+def _finger_contacts_object(obj: str) -> set[str]:
+    body_id = name_to_cube.get(obj)
+    if body_id is None:
+        return set()
+    mujoco.mj_forward(model, data)
+    contacts: set[str] = set()
+    for contact_index in range(data.ncon):
+        contact = data.contact[contact_index]
+        body1_id = int(model.geom_bodyid[int(contact.geom1)])
+        body2_id = int(model.geom_bodyid[int(contact.geom2)])
+        if body1_id != body_id and body2_id != body_id:
+            continue
+        other_id = body2_id if body1_id == body_id else body1_id
+        other_name = mujoco.mj_id2name(
+            model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            other_id,
+        )
+        if other_name and other_name.endswith(("left_finger", "right_finger")):
+            contacts.add(other_name)
+    return contacts
 
 
 # =============================
@@ -537,9 +517,18 @@ def _get_ompl_planner():
             sampler_range=CONFIG.motion.sampler_range,
             waypoint_step=CONFIG.motion.waypoint_step,
             goal_tolerance=CONFIG.motion.goal_tolerance,
+            valid_state_sampler=CONFIG.motion.valid_state_sampler,
+            optimization_planner=CONFIG.motion.optimization_planner,
+            minimum_obstacle_clearance=CONFIG.safety.planning_obstacle_clearance_m,
+            obstacle_body_names=CONFIG.model.obstacle_body_names,
             robot_body_names=active_robot_body_names,
             arm_joint_names=arm_joint_names,
         )
+        if _held_object_name is not None:
+            planner.attach_body(
+                _held_object_name,
+                f"{_arm_prefix(ACTIVE_ARM)}hand",
+            )
         _planner_by_arm[planner_key] = planner
     else:
         planner.sync_live_data(data)
@@ -632,6 +621,15 @@ def _mujoco_fk_error(q: Sequence[float], target_xyz: Sequence[float]) -> tuple[f
     pos_err = float(np.linalg.norm(np.asarray(target_xyz, dtype=float).reshape(3) - ee_pos))
     ori_err = _desired_orientation_error_from_matrix(_plan_data.xmat[ee_id].reshape(3, 3))
     return pos_err, ori_err, _round_vec(ee_pos, 4)
+
+
+def _mujoco_fk_xyz(q: Sequence[float]) -> np.ndarray:
+    q_arr = clip_arm(np.asarray(q, dtype=float).reshape(-1))
+    _plan_data.qpos[:] = data.qpos[:]
+    _plan_data.qvel[:] = 0.0
+    _plan_data.qpos[arm_qpos_adr] = q_arr
+    mujoco.mj_forward(model, _plan_data)
+    return _plan_data.xpos[ee_id].copy()
 
 
 def _log_arm_state(stage: str, status: str, **fields) -> None:
@@ -862,13 +860,24 @@ def _pinocchio_ik_solve_to(
     }
 
     damping = 1e-4
+    pin.forwardKinematics(_PINOCCHIO_MODEL, _PINOCCHIO_DATA, q)
+    pin.updateFramePlacements(_PINOCCHIO_MODEL, _PINOCCHIO_DATA)
+    initial_rotation = np.asarray(
+        _PINOCCHIO_DATA.oMf[_PINOCCHIO_FRAME_ID].rotation
+    ).reshape(3, 3)
+    desired_rotation = _tool_target_rotation(initial_rotation)
+    orientation_weight = 0.45
     for it in range(steps):
         pin.forwardKinematics(_PINOCCHIO_MODEL, _PINOCCHIO_DATA, q)
         pin.updateFramePlacements(_PINOCCHIO_MODEL, _PINOCCHIO_DATA)
         frame = _PINOCCHIO_DATA.oMf[_PINOCCHIO_FRAME_ID]
         pos_error = target_xyz - np.asarray(frame.translation).reshape(3)
         pos_norm = float(np.linalg.norm(pos_error))
-        ori_norm = _desired_orientation_error_from_matrix(np.asarray(frame.rotation))
+        frame_rotation = np.asarray(frame.rotation).reshape(3, 3)
+        orientation_error = np.asarray(
+            pin.log3(desired_rotation @ frame_rotation.T)
+        ).reshape(3)
+        ori_norm = float(np.linalg.norm(orientation_error))
         info.update({
             "converged": pos_norm <= pos_tol and ori_norm <= ori_tol,
             "pos_err_norm": pos_norm,
@@ -886,12 +895,39 @@ def _pinocchio_ik_solve_to(
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED,
         )
         jpos = jac[:3, :nv]
-        lhs = jpos @ jpos.T + damping * np.eye(3)
-        dq = jpos.T @ np.linalg.solve(lhs, pos_error)
+        jrot = jac[3:6, :nv]
+        jacobian_6d = np.vstack((jpos, orientation_weight * jrot))
+        error_6d = np.concatenate(
+            (pos_error, orientation_weight * orientation_error)
+        )
+        lhs = jacobian_6d @ jacobian_6d.T + damping * np.eye(6)
+        dq = jacobian_6d.T @ np.linalg.solve(lhs, error_6d)
         dq = np.clip(dq, -0.12, 0.12)
         q = pin.integrate(_PINOCCHIO_MODEL, q, dq)
 
     return clip_arm(q[:7]), info
+
+
+def _tool_target_rotation(reference_rotation: np.ndarray) -> np.ndarray:
+    """Align tool Z and optionally lock yaw through a configured tool X axis."""
+    desired_z = np.asarray(_DESIRED_Z, dtype=float).reshape(3)
+    desired_z /= max(float(np.linalg.norm(desired_z)), 1e-9)
+    reference_x = (
+        np.asarray(reference_rotation, dtype=float).reshape(3, 3)[:, 0]
+        if _DESIRED_X is None
+        else np.asarray(_DESIRED_X, dtype=float).reshape(3)
+    )
+    desired_x = reference_x - desired_z * float(np.dot(reference_x, desired_z))
+    if float(np.linalg.norm(desired_x)) < 1e-6:
+        fallback = np.array([1.0, 0.0, 0.0])
+        if abs(float(np.dot(fallback, desired_z))) > 0.9:
+            fallback = np.array([0.0, 1.0, 0.0])
+        desired_x = fallback - desired_z * float(np.dot(fallback, desired_z))
+    desired_x /= float(np.linalg.norm(desired_x))
+    desired_y = np.cross(desired_z, desired_x)
+    desired_y /= float(np.linalg.norm(desired_y))
+    desired_x = np.cross(desired_y, desired_z)
+    return np.column_stack((desired_x, desired_y, desired_z))
 
 
 def _pinocchio_base_translation() -> np.ndarray:
@@ -1090,6 +1126,8 @@ def _ik_ori_limit_for_label(label: str) -> float:
 def _null_ref_candidates(null_ref: Optional[np.ndarray]) -> list[np.ndarray]:
     base_ref = np.asarray(null_ref if null_ref is not None else GRASP_READY, dtype=float).copy()
     refs = [current_q(), base_ref, GRASP_READY.copy(), _ELBOW_UP_REF.copy()]
+    if _grouped_wall_bounds() is not None:
+        refs.append(_WALL_RIGHT_REF.copy())
     if _LAST_SUCCESSFUL_SEED is not None:
         refs.append(_LAST_SUCCESSFUL_SEED.copy())
     for delta in (0.18, -0.18):
@@ -1112,6 +1150,8 @@ def _ranked_ik_goals(
     null_ref: Optional[np.ndarray],
     label: str,
     ignored_body_names: Optional[Sequence[str]] = None,
+    max_valid_candidates: Optional[int] = None,
+    start_q: Optional[Sequence[float]] = None,
 ) -> list[IKAttemptResult]:
     planner = _get_ompl_planner()
     pos_limit = _ik_pos_limit_for_label(label)
@@ -1124,10 +1164,16 @@ def _ranked_ik_goals(
         if _hint_tol is not None and _hint_tol > pos_limit:
             pos_limit = _hint_tol
     attempts: list[IKAttemptResult] = []
+    valid_limit = int(max_valid_candidates or MAX_VALID_IK_CANDIDATES)
+    reference_q = (
+        current_q()
+        if start_q is None
+        else clip_arm(np.asarray(start_q, dtype=float).reshape(-1))
+    )
 
     for candidate_idx, xyz in enumerate(_target_xyz_candidates(target_xyz, label)):
         for seed_idx, ref in enumerate(_null_ref_candidates(null_ref)):
-            q_seed = current_q() if seed_idx == 0 else ref
+            q_seed = reference_q if seed_idx == 0 else ref
             q, info = _solve_ik_to(
                 xyz,
                 null_ref=ref,
@@ -1157,7 +1203,7 @@ def _ranked_ik_goals(
             score = (
                 pos_err
                 + 0.15 * ori_err
-                + 0.02 * float(np.linalg.norm(np.asarray(q, dtype=float) - current_q()))
+                + 0.02 * float(np.linalg.norm(np.asarray(q, dtype=float) - reference_q))
             )
             if label.startswith("pick(") and "grasp" in label and "pregrasp" not in label:
                 score += 1.5 * float(np.linalg.norm(np.asarray(xyz, dtype=float) - np.asarray(target_xyz, dtype=float)))
@@ -1187,7 +1233,7 @@ def _ranked_ik_goals(
                 actual_xyz=fk_ee_xyz,
                 ee_xyz=_ee_xyz(),
                 q=_round_vec(q, 4),
-                q_error_norm=round(float(np.linalg.norm(np.asarray(q, dtype=float) - current_q())), 5),
+                q_error_norm=round(float(np.linalg.norm(np.asarray(q, dtype=float) - reference_q)), 5),
                 pos_err=round(pos_err, 5),
                 ori_err=round(ori_err, 5),
                 iterations=info.get("iters", 0),
@@ -1205,7 +1251,7 @@ def _ranked_ik_goals(
                 score=round(score, 5),
             )
             valid_count = sum(1 for item in attempts if item.failure_reason == IK_SUCCESS)
-            if valid_count >= MAX_VALID_IK_CANDIDATES:
+            if valid_count >= valid_limit:
                 return rank_ik_attempts(attempts)
             if len(attempts) >= MAX_IK_ATTEMPTS_PER_SEGMENT and valid_count > 0:
                 return rank_ik_attempts(attempts)
@@ -1492,8 +1538,26 @@ def _move_pose_safe(
     ignored_body_names: Optional[Sequence[str]] = None,
     label: str = "",
     cautious_motion: bool = False,
+    allow_wall_bypass: bool = True,
 ) -> bool:
     global _LAST_SUCCESSFUL_SEED
+    if allow_wall_bypass:
+        bypass = _grouped_wall_bypass_waypoints(
+            np.asarray(target_xyz, dtype=float)
+        )
+        if bypass is not None:
+            side, waypoints = bypass
+            for index, waypoint in enumerate(waypoints, start=1):
+                if not _move_pose_safe(
+                    waypoint,
+                    grip=grip,
+                    null_ref=cube_null_ref(waypoint),
+                    ignored_body_names=ignored_body_names,
+                    label=f"wall gateway {side} {index} for {label}",
+                    cautious_motion=cautious_motion,
+                    allow_wall_bypass=False,
+                ):
+                    return False
     _log_arm_state(
         "MOVE_POSE",
         "START",
@@ -1606,6 +1670,124 @@ def _move_pose_safe(
     return False
 
 
+def probe_motion_to(
+    target_xyz: Sequence[float],
+    *,
+    label: str = "motion probe",
+    ignored_body_names: Optional[Sequence[str]] = None,
+    time_limit: Optional[float] = None,
+) -> dict:
+    """Run IK and a real OMPL solve without mutating the live simulation."""
+    qpos_before = data.qpos.copy()
+    qvel_before = data.qvel.copy()
+    ctrl_before = data.ctrl.copy()
+    started = time.perf_counter()
+    result = {
+        "success": False,
+        "ik_success": False,
+        "ompl_success": False,
+        "planning_time": 0.0,
+        "path_length": 0.0,
+        "failure_reason": "ik_unreachable",
+    }
+    try:
+        planner = _get_ompl_planner()
+        if planner is None:
+            result["failure_reason"] = "ompl_unavailable"
+            return result
+        target = np.asarray(target_xyz, dtype=float)
+        bypass = _grouped_wall_bypass_waypoints(target)
+        route_targets: list[tuple[str, np.ndarray]] = []
+        if bypass is not None:
+            side, waypoints = bypass
+            route_targets.extend(
+                (f"wall gateway {side} {index} for {label}", waypoint)
+                for index, waypoint in enumerate(waypoints, start=1)
+            )
+            result["route"] = f"wall_{side}"
+        else:
+            result["route"] = "direct"
+        route_targets.append((label, target))
+
+        solve_time = float(
+            time_limit
+            if time_limit is not None
+            else min(DEFAULT_TIME_LIMIT, 6.0)
+        )
+        virtual_q = current_q().copy()
+        path_length = 0.0
+        waypoint_count = 0
+        for segment_index, (segment_label, segment_target) in enumerate(
+            route_targets, start=1
+        ):
+            attempts = _ranked_ik_goals(
+                segment_target,
+                cube_null_ref(segment_target),
+                segment_label,
+                ignored_body_names=ignored_body_names,
+                max_valid_candidates=2,
+                start_q=virtual_q,
+            )
+            valid_attempts = [
+                attempt
+                for attempt in attempts
+                if attempt.failure_reason == IK_SUCCESS
+            ]
+            if not valid_attempts:
+                result["failure_reason"] = (
+                    attempts[0].failure_reason if attempts else "ik_unreachable"
+                )
+                result["failed_segment"] = segment_index
+                return result
+
+            trajectory = None
+            info = {}
+            for attempt in valid_attempts:
+                trajectory, info = planner.plan(
+                    start_q=virtual_q,
+                    goal_q=attempt.q,
+                    time_limit=solve_time,
+                    planner_name=DEFAULT_PLANNER_NAME,
+                    ignored_body_names=ignored_body_names,
+                    fragile_mode=False,
+                )
+                if trajectory is not None:
+                    break
+            if trajectory is None:
+                result["failure_reason"] = "ompl_no_path_found"
+                result["failed_segment"] = segment_index
+                return result
+
+            virtual_q = np.asarray(trajectory[-1], dtype=float).copy()
+            path_length += float(info.get("path_length_joint_space", 0.0))
+            waypoint_count += int(info.get("num_waypoints", len(trajectory)))
+
+        result.update(
+            success=True,
+            ik_success=True,
+            ompl_success=True,
+            path_length=path_length,
+            failure_reason=None,
+            planner_name=info.get("planner_name", DEFAULT_PLANNER_NAME),
+            waypoint_count=waypoint_count,
+            segment_count=len(route_targets),
+        )
+        return result
+    finally:
+        result["planning_time"] = round(time.perf_counter() - started, 4)
+        mutated = not (
+            np.array_equal(data.qpos, qpos_before)
+            and np.array_equal(data.qvel, qvel_before)
+            and np.array_equal(data.ctrl, ctrl_before)
+        )
+        if mutated:
+            data.qpos[:] = qpos_before
+            data.qvel[:] = qvel_before
+            data.ctrl[:] = ctrl_before
+            mujoco.mj_forward(model, data)
+            raise RuntimeError("motion probe mutated live simulation state")
+
+
 # =============================
 # SAFETY / GRIPPER HELPERS
 # =============================
@@ -1642,6 +1824,27 @@ def _move_to_grasp_ready(
     if float(np.linalg.norm(current_q() - GRASP_READY)) < 0.05:
         return True
     log_event("TRANSIT", "START", phase=reason, target="GRASP_READY")
+    grasp_ready_xyz = _mujoco_fk_xyz(GRASP_READY)
+    bypass = _grouped_wall_bypass_waypoints(grasp_ready_xyz)
+    if bypass is not None:
+        side, waypoints = bypass
+        for index, waypoint in enumerate(waypoints, start=1):
+            if not _move_pose_safe(
+                waypoint,
+                grip=grip,
+                null_ref=cube_null_ref(waypoint),
+                ignored_body_names=ignored_body_names,
+                label=f"wall gateway {side} {index} for transit {reason}",
+                allow_wall_bypass=False,
+            ):
+                log_event(
+                    "TRANSIT",
+                    "FAILED",
+                    phase=reason,
+                    target="GRASP_READY",
+                    failed_gateway=index,
+                )
+                return False
     ok = _move_with_ompl(
         goal_q=GRASP_READY,
         grip=grip,
@@ -1667,15 +1870,17 @@ def set_grip(target: float, steps: int = 200):
 def drop(ignored_body_name: Optional[str] = None):
     """Emergency release at the current arm position."""
     global _held_grip_target
+    released_object = _held_object_name or ignored_body_name
     ignored = [ignored_body_name] if _held_object_name is not None and ignored_body_name else None
-    _log_arm_state("DROP", "START", object_id=_held_object_name or ignored_body_name, ignored_body_names=ignored or [])
+    _log_arm_state("DROP", "START", object_id=released_object, ignored_body_names=ignored or [])
     set_grip(OPEN_GRIP, steps=300)
+    _set_held_object(None)
     for _ in range(120):
         mujoco.mj_step(model, data)
         viewer.sync()
     _recover_to_safe_hover(ignored_body_names=ignored)
     _held_grip_target = 0.015
-    _log_arm_state("DROP", "OK")
+    _log_arm_state("DROP", "OK", object_id=released_object)
 
 
 # =============================
@@ -1713,6 +1918,57 @@ _init_obstacle_monitoring()
 _held_object_name: Optional[str] = None
 _held_grip_target: float = 0.015
 _pick_call_counts: dict[str, int] = {}
+
+
+def _set_live_carry_constraint(object_name: str, active: bool) -> None:
+    equality_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_EQUALITY,
+        f"carry_{object_name}",
+    )
+    if equality_id < 0:
+        return
+    if active:
+        parent_id = int(model.body(f"{_arm_prefix(ACTIVE_ARM)}hand").id)
+        body_id = int(model.body(object_name).id)
+        mujoco.mj_forward(model, data)
+        parent_rotation = data.xmat[parent_id].reshape(3, 3).copy()
+        body_rotation = data.xmat[body_id].reshape(3, 3).copy()
+        relative_position = parent_rotation.T @ (
+            data.xpos[body_id] - data.xpos[parent_id]
+        )
+        relative_rotation = parent_rotation.T @ body_rotation
+        relative_quaternion = np.zeros(4, dtype=float)
+        mujoco.mju_mat2Quat(
+            relative_quaternion,
+            relative_rotation.reshape(-1),
+        )
+        # Weld equality data: anchor[0:3], relative pose[3:10], torquescale[10].
+        model.eq_data[equality_id, 3:6] = relative_position
+        model.eq_data[equality_id, 6:10] = relative_quaternion
+    data.eq_active[equality_id] = bool(active)
+    mujoco.mj_forward(model, data)
+
+
+def _set_held_object(object_name: Optional[str]) -> None:
+    global _held_object_name
+    previous = _held_object_name
+    if previous == object_name:
+        return
+    if previous is not None:
+        _set_live_carry_constraint(previous, False)
+        if _live_collision_policy is not None:
+            _live_collision_policy.detach_body(previous)
+        for planner in _planner_by_arm.values():
+            planner.detach_body(previous)
+    _held_object_name = object_name
+    if object_name is not None:
+        _set_live_carry_constraint(object_name, True)
+        if _live_collision_policy is not None:
+            _live_collision_policy.attach_body(object_name)
+        parent_body_name = f"{_arm_prefix(ACTIVE_ARM)}hand"
+        for planner in _planner_by_arm.values():
+            planner.attach_body(object_name, parent_body_name)
 
 
 def shutdown_runtime() -> None:
@@ -1984,7 +2240,21 @@ def pick(
         mujoco.mj_step(model, data)
         viewer.sync()
 
-    _held_object_name = obj
+    finger_contacts = _finger_contacts_object(obj)
+    if len(finger_contacts) < 2:
+        _log_arm_state(
+            "PICK",
+            "FAILED",
+            object_id=obj,
+            phase="grasp_contact",
+            contact_body_names=sorted(finger_contacts),
+            failure_reason="bilateral_finger_contact_missing",
+        )
+        set_grip(OPEN_GRIP, steps=180)
+        _recover_to_safe_hover(ignored_body_names=[obj])
+        return
+
+    _set_held_object(obj)
     _held_grip_target = grip_target
 
     # 4) Lift straight up using the same bounded recovery contact policy.
@@ -1999,7 +2269,7 @@ def pick(
         # If lift planning fails after grasping, release immediately and let the
         # closed-loop system replan from the table state.
         drop(obj)
-        _held_object_name = None
+        _set_held_object(None)
         _check_obstacles_fallen(f"pick({obj}) lift")
         _log_arm_state("PICK", "FAILED", object_id=obj, phase="lift", target_xyz=_round_vec(lift_xyz, 4), failure_reason="move_lift_failed")
         return
@@ -2010,7 +2280,7 @@ def pick(
         print(f"[exec][PICK_RETRY] {obj} not lifted after grasp z={z:.3f}; release and retry")
         _log_arm_state("PICK", "FAILED", object_id=obj, phase="lift_check", failure_reason="object_not_lifted", object_z=round(z, 4))
         drop(obj)
-        _held_object_name = None
+        _set_held_object(None)
         _check_obstacles_fallen(f"pick({obj}) lift_check")
         return
     _log_arm_state("PICK", "OK", object_id=obj, object_z=round(z, 4))
@@ -2124,9 +2394,10 @@ def place(
                 ignored_body_names=[obj],
                 label=f"grouped wall bypass {side} {index}",
                 cautious_motion=False,
+                allow_wall_bypass=False,
             ):
                 drop(obj)
-                _held_object_name = None
+                _set_held_object(None)
                 _log_arm_state(
                     "WALL_BYPASS",
                     "FAILED",
@@ -2143,7 +2414,7 @@ def place(
             )
             if not still_held or grasp_distance > 0.18:
                 drop(obj)
-                _held_object_name = None
+                _set_held_object(None)
                 _log_arm_state(
                     "WALL_BYPASS",
                     "FAILED",
@@ -2171,7 +2442,7 @@ def place(
         cautious_motion=cautious_motion,
     ):
         drop(obj)
-        _held_object_name = None
+        _set_held_object(None)
         _log_arm_state("PLACE", "FAILED", object_id=obj, phase="preplace", target_xyz=_round_vec(preplace_xyz, 4), failure_reason="move_preplace_failed")
         return
 
@@ -2202,7 +2473,7 @@ def place(
         cautious_motion=cautious_motion,
     ):
         drop(obj)
-        _held_object_name = None
+        _set_held_object(None)
         _log_arm_state("PLACE", "FAILED", object_id=obj, phase="release", target_xyz=_round_vec(release_xyz, 4), failure_reason="move_release_failed")
         return
 
@@ -2234,6 +2505,7 @@ def place(
     set_grip(guide_target, steps=CONFIG.grasp.release_guide_steps)
     _step_sim(CONFIG.grasp.release_guide_settle_steps, grip=guide_target)
     set_grip(OPEN_GRIP, steps=CONFIG.grasp.release_open_steps)
+    _set_held_object(None)
     print(f"[exec] finger after open:  {_finger_pos():.4f}")
     _log_arm_state("PLACE", "GRIP_OPENED", object_id=obj, target_xyz=_round_vec(place_pos, 4), finger_after=round(_finger_pos(), 4))
 
@@ -2272,7 +2544,7 @@ def place(
         print(f"[exec] retreat failed after place({x:.3f}, {y:.3f}, {target_z:.3f})")
         _log_arm_state("PLACE", "RETREAT_FAILED", object_id=obj, target_xyz=_round_vec(retreat_xyz, 4), failure_reason="retreat_failed_after_release")
 
-    _held_object_name = None
+    _set_held_object(None)
     _held_grip_target = 0.015
     post_place_ignored = (
         post_release_ignored

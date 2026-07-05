@@ -45,6 +45,9 @@ class OMPLConfig:
     sampler_range: float = 0.08
     waypoint_step: float = 0.015
     goal_tolerance: float = 1e-3
+    valid_state_sampler: str | None = None
+    optimization_planner: str | None = None
+    minimum_obstacle_clearance: float = 0.0
 
 
 class PandaOMPLPlanner:
@@ -70,6 +73,7 @@ class PandaOMPLPlanner:
         config: Optional[OMPLConfig] = None,
         robot_body_names: Optional[Sequence[str]] = None,
         arm_joint_names: Optional[Sequence[str]] = None,
+        obstacle_body_names: Optional[Sequence[str]] = None,
     ):
         self.model = model
         self.live_data = data
@@ -79,6 +83,7 @@ class PandaOMPLPlanner:
         self.collision_policy = CollisionPolicy(
             model=self.model,
             robot_body_names=tuple(self.robot_body_names),
+            obstacle_body_names=obstacle_body_names,
         )
         self.arm_joint_names: List[str] = list(arm_joint_names or self.DEFAULT_ARM_JOINTS)
 
@@ -113,6 +118,9 @@ class PandaOMPLPlanner:
 
         self._ignored_body_names: set[str] = set()
         self.collision_policy.set_ignored_bodies(self._ignored_body_names)
+        self._attached_body_transforms: dict[
+            str, tuple[int, int, np.ndarray, np.ndarray]
+        ] = {}
 
         # Set by plan() before each solve so the validity checker can
         # exempt the start state (the live arm configuration is always
@@ -129,6 +137,35 @@ class PandaOMPLPlanner:
         """Call this before planning if the simulation state has changed."""
         self.live_data = data
         self._sync_from_live_data()
+
+    def attach_body(self, body_name: str, parent_body_name: str) -> None:
+        """Attach a free body to a robot body for candidate-state collision checks."""
+        body_id = int(self.model.body(body_name).id)
+        parent_id = int(self.model.body(parent_body_name).id)
+        if int(self.model.body_jntnum[body_id]) != 1:
+            raise ValueError(f"attached body must have one free joint: {body_name}")
+        joint_id = int(self.model.body_jntadr[body_id])
+        if int(self.model.jnt_type[joint_id]) != int(mujoco.mjtJoint.mjJNT_FREE):
+            raise ValueError(f"attached body must use a free joint: {body_name}")
+        mujoco.mj_forward(self.model, self.live_data)
+        parent_rotation = self.live_data.xmat[parent_id].reshape(3, 3).copy()
+        body_rotation = self.live_data.xmat[body_id].reshape(3, 3).copy()
+        relative_position = parent_rotation.T @ (
+            self.live_data.xpos[body_id] - self.live_data.xpos[parent_id]
+        )
+        relative_rotation = parent_rotation.T @ body_rotation
+        qpos_address = int(self.model.jnt_qposadr[joint_id])
+        self._attached_body_transforms[body_name] = (
+            parent_id,
+            qpos_address,
+            relative_position,
+            relative_rotation,
+        )
+        self.collision_policy.attach_body(body_name)
+
+    def detach_body(self, body_name: str) -> None:
+        self._attached_body_transforms.pop(body_name, None)
+        self.collision_policy.detach_body(body_name)
 
     def plan(
         self,
@@ -157,6 +194,10 @@ class PandaOMPLPlanner:
             )
 
         solve_time = float(time_limit if time_limit is not None else self.cfg.time_limit)
+        if self.cfg.valid_state_sampler == "obstacle_based":
+            # PathSimplifier can shortcut back through a narrow obstacle band.
+            # Keep the collision-checked raw path and only densify it below.
+            simplify = False
 
         # Update live scene snapshot used by the collision checker.
         self._sync_from_live_data()
@@ -177,7 +218,11 @@ class PandaOMPLPlanner:
             else (planner_name or self.cfg.planner_name)
         )
 
-        goal_candidates = self._goal_candidates(goal_q)
+        goal_candidates = (
+            [self._clip_arm(goal_q)]
+            if self.cfg.valid_state_sampler == "obstacle_based"
+            else self._goal_candidates(goal_q)
+        )
         per_try_time = max(0.35, solve_time / max(len(goal_candidates), 1))
 
         last_info = {
@@ -209,6 +254,7 @@ class PandaOMPLPlanner:
                 ss.getSpaceInformation().setStateValidityCheckingResolution(
                     self.cfg.state_validity_resolution
                 )
+                self._configure_valid_state_sampler(ss.getSpaceInformation())
 
                 objective = self._make_objective(ss.getSpaceInformation(), fragile_mode)
                 self._attach_objective(ss, objective)
@@ -254,6 +300,21 @@ class PandaOMPLPlanner:
                 path = ss.getSolutionPath()
                 raw = self._extract_path(path)
                 dense = self._densify_path(raw, step=self.cfg.waypoint_step)
+                invalid_waypoint = next(
+                    (
+                        index
+                        for index, waypoint in enumerate(dense[1:], start=1)
+                        if not self._is_state_valid(self._q_to_state(waypoint))
+                    ),
+                    None,
+                )
+                if invalid_waypoint is not None:
+                    last_info["goal_attempts"][-1].update(
+                        status="postcheck_invalid",
+                        invalid_waypoint=invalid_waypoint,
+                        reason=self._last_invalid_reason,
+                    )
+                    continue
 
                 last_info.update({
                     "solved": True,
@@ -312,14 +373,7 @@ class PandaOMPLPlanner:
 
     def _make_planner(self, si: ob.SpaceInformation, planner_name: str, fragile_mode: bool = False):
         if fragile_mode:
-            # Prefer a more conservative planner for fragile scenes.
-            planner = og.BITstar(si)
-            if hasattr(planner, "setRange"):
-                try:
-                    planner.setRange(float(min(self.cfg.sampler_range, 0.06)))
-                except Exception:
-                    pass
-            return planner
+            planner_name = self.cfg.optimization_planner or planner_name
 
         name = planner_name.strip().lower()
 
@@ -345,6 +399,18 @@ class PandaOMPLPlanner:
                 pass
 
         return planner
+
+    def _configure_valid_state_sampler(self, si: ob.SpaceInformation) -> None:
+        sampler = (self.cfg.valid_state_sampler or "uniform").strip().lower()
+        if sampler == "uniform":
+            return
+        if sampler != "obstacle_based":
+            raise ValueError(f"Unsupported valid-state sampler: {sampler}")
+        si.setValidStateSamplerAllocator(
+            lambda space_information: ob.ObstacleBasedValidStateSampler(
+                space_information
+            )
+        )
 
     def _q_to_state(self, q: np.ndarray):
         state = self.space.allocState()
@@ -428,6 +494,27 @@ class PandaOMPLPlanner:
         self.plan_data.qvel[:] = self.live_data.qvel[:]
         mujoco.mj_forward(self.model, self.plan_data)
 
+    def _apply_attached_body_poses(self) -> None:
+        if not self._attached_body_transforms:
+            return
+        for _, (
+            parent_id,
+            qpos_address,
+            relative_position,
+            relative_rotation,
+        ) in self._attached_body_transforms.items():
+            parent_rotation = self.plan_data.xmat[parent_id].reshape(3, 3)
+            position = (
+                self.plan_data.xpos[parent_id]
+                + parent_rotation @ relative_position
+            )
+            rotation = parent_rotation @ relative_rotation
+            quaternion = np.zeros(4, dtype=float)
+            mujoco.mju_mat2Quat(quaternion, rotation.reshape(-1))
+            self.plan_data.qpos[qpos_address : qpos_address + 3] = position
+            self.plan_data.qpos[qpos_address + 3 : qpos_address + 7] = quaternion
+        mujoco.mj_forward(self.model, self.plan_data)
+
     def _state_clearance(self, state) -> float:
         """
         Conservative clearance proxy:
@@ -440,6 +527,7 @@ class PandaOMPLPlanner:
         self.plan_data.qvel[:] = 0.0
         self.plan_data.qpos[self.arm_qpos_adr] = q
         mujoco.mj_forward(self.model, self.plan_data)
+        self._apply_attached_body_poses()
 
         return self.collision_policy.minimum_body_center_clearance(self.plan_data)
 
@@ -467,10 +555,21 @@ class PandaOMPLPlanner:
         self.plan_data.qvel[:] = 0.0
         self.plan_data.qpos[self.arm_qpos_adr] = q
         mujoco.mj_forward(self.model, self.plan_data)
+        self._apply_attached_body_poses()
 
         report = self.collision_policy.check_contacts(self.plan_data)
         if not report.valid:
             self._last_invalid_reason = report.reason
+            return False
+
+        clearance = self.collision_policy.minimum_obstacle_geom_clearance(
+            self.plan_data
+        )
+        if clearance < self.cfg.minimum_obstacle_clearance:
+            self._last_invalid_reason = (
+                "obstacle_clearance_below_minimum:"
+                f"{clearance:.5f}<{self.cfg.minimum_obstacle_clearance:.5f}"
+            )
             return False
 
         return True
@@ -486,14 +585,19 @@ def make_default_panda_planner(
     sampler_range: float = 0.08,
     waypoint_step: float = 0.015,
     goal_tolerance: float = 1e-3,
+    valid_state_sampler: str | None = None,
+    optimization_planner: str | None = None,
+    minimum_obstacle_clearance: float = 0.0,
     robot_body_names: Optional[Sequence[str]] = None,
     arm_joint_names: Optional[Sequence[str]] = None,
+    obstacle_body_names: Optional[Sequence[str]] = None,
 ) -> PandaOMPLPlanner:
     return PandaOMPLPlanner(
         model=model,
         data=data,
         robot_body_names=robot_body_names,
         arm_joint_names=arm_joint_names,
+        obstacle_body_names=obstacle_body_names,
         config=OMPLConfig(
             planner_name=planner_name,
             fragile_planner_name=fragile_planner_name,
@@ -502,5 +606,8 @@ def make_default_panda_planner(
             sampler_range=sampler_range,
             waypoint_step=waypoint_step,
             goal_tolerance=goal_tolerance,
+            valid_state_sampler=valid_state_sampler,
+            optimization_planner=optimization_planner,
+            minimum_obstacle_clearance=minimum_obstacle_clearance,
         ),
     )

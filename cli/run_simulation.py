@@ -154,6 +154,15 @@ def main() -> int:
         enable_viewer=args.viewer,
     )
     runtime_config = plugin.configure_runtime(plan, world, runtime_config).validate()
+    runtime_config = replace(
+        runtime_config,
+        model=replace(
+            runtime_config.model,
+            base_xy=world.robot_base_xy,
+            base_z=world.robot_base_z,
+            obstacle_body_names=tuple(obstacle.id for obstacle in world.obstacles),
+        ),
+    ).validate()
     if args.use_adaptive_cache:
         from configuration.types import AlignCacheConfig
         runtime_config = replace(
@@ -179,6 +188,8 @@ def main() -> int:
             world.table_x_range[1] - world.table_x_range[0],
             world.table_y_range[1] - world.table_y_range[0],
         ),
+        base_xy=world.robot_base_xy,
+        base_z=world.robot_base_z,
     )
     runtime_config = replace(
         runtime_config,
@@ -243,6 +254,7 @@ def main() -> int:
             primitives=primitives,
             runtime_config=runtime_config,
             robust_align=args.robust_align,
+            runtime_module=runtime,
         )
         result = runner.run()
     except Exception as exc:

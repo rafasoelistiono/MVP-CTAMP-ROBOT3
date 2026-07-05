@@ -76,7 +76,7 @@ def test_group_order_correct(slots, gt):
 def test_tidy_groups_stay_in_two_right_side_y_lanes(slots, world, gt):
     wall = world.obstacles[0]
     right_edge = wall.pose[0] + wall.size[0] / 2.0 + 0.13
-    lane_x = {"blue_lane": 0.20, "red_lane": 0.32}
+    lane_x = {"blue_lane": 0.22, "red_lane": 0.36}
     for group in gt.groups:
         xs = [
             pose[0]
@@ -90,7 +90,7 @@ def test_tidy_groups_stay_in_two_right_side_y_lanes(slots, world, gt):
         ]
         assert min(xs) > right_edge
         assert set(round(x, 2) for x in xs) == {lane_x[group.id]}
-        assert max(ys) - min(ys) == pytest.approx(0.375)
+        assert max(ys) - min(ys) == pytest.approx(0.34)
 
 
 def test_baseline_align_slots_unchanged():

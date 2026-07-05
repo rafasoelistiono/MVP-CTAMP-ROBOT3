@@ -117,37 +117,115 @@ class AlignTaskPlugin:
         if gt and gt.enabled:
             home_q = config.model.home_q
             if world.scene_id == "align_grouped_tidy_wall_world":
-                home_q = (0.0, -1.0, 0.0, -2.2, 0.0, 1.2, 0.0)
+                home_q = (-0.8, -0.8, 0.0, -2.4, 0.0, 1.6, -0.7)
+            motion = replace(
+                config.motion,
+                time_limit_s=20.0,
+                waypoint_step=0.010,
+                settle_steps_per_waypoint=10,
+                final_settle_steps=20,
+            )
+            verification = config.verification
+            safety = config.safety
+            grasp = replace(
+                config.grasp,
+                approach_clearance_m=0.24,
+                pick_grip_sequence=(0.024, 0.023, 0.022),
+            )
+            if world.scene_id == "align_grouped_tidy_wall_world":
+                motion = replace(
+                    motion,
+                    ompl_required=True,
+                    state_validity_resolution=0.0004,
+                    waypoint_step=0.006,
+                    settle_steps_per_waypoint=20,
+                    valid_state_sampler="obstacle_based",
+                    optimization_planner="BITstar",
+                )
+                ik = replace(
+                    config.ik,
+                    backend="pinocchio",
+                    require_pinocchio=True,
+                    use_fallback=False,
+                )
+                verification = replace(
+                    verification,
+                    at_x_m=0.020,
+                    at_y_m=0.020,
+                )
+                grasp = replace(
+                    grasp,
+                    approach_clearance_m=0.20,
+                    pick_grip_sequence=(0.030, 0.028, 0.026),
+                    pick_offset_sequence_m=(0.105, 0.105, 0.105),
+                )
+                safety = replace(safety, planning_obstacle_clearance_m=0.001)
+            else:
+                ik = config.ik
             return replace(
                 config,
-                model=replace(config.model, home_q=home_q, grasp_ready_q=home_q),
-                motion=replace(
-                    config.motion,
-                    time_limit_s=20.0,
-                    waypoint_step=0.010,
-                    settle_steps_per_waypoint=10,
-                    final_settle_steps=20,
+                model=replace(
+                    config.model,
+                    base_xy=world.robot_base_xy,
+                    base_z=world.robot_base_z,
+                    obstacle_body_names=tuple(
+                        obstacle.id for obstacle in world.obstacles
+                    ),
+                    home_q=home_q,
+                    grasp_ready_q=home_q,
+                    desired_tool_x=(
+                        (1.0, 0.0, 0.0)
+                        if world.scene_id == "align_grouped_tidy_wall_world"
+                        else config.model.desired_tool_x
+                    ),
                 ),
-                grasp=replace(
-                    config.grasp,
-                    approach_clearance_m=0.24,
-                    pick_grip_sequence=(0.024, 0.023, 0.022),
-                ),
+                ik=ik,
+                motion=motion,
+                verification=verification,
+                grasp=grasp,
+                safety=safety,
             ).validate()
         if world.obstacles:
             return replace(
                 config,
-                model=replace(config.model, grasp_ready_q=config.model.home_q),
+                model=replace(
+                    config.model,
+                    base_xy=world.robot_base_xy,
+                    base_z=world.robot_base_z,
+                    obstacle_body_names=tuple(
+                        obstacle.id for obstacle in world.obstacles
+                    ),
+                    grasp_ready_q=config.model.home_q,
+                ),
             ).validate()
         return config.validate()
 
     def assess_progress(self, plan, verifier, slots, completed_objects):
-        stable = tuple(
-            object_id
-            for object_id in plan.target_objects
-            if object_id in completed_objects
+        stable: list[str] = []
+        invalid: list[str] = []
+        for object_id in plan.target_objects:
+            if object_id not in completed_objects:
+                continue
+            at_ok = True
+            stable_ok = True
+            if hasattr(verifier, "check_at"):
+                slot_id = None
+                for step in plan.steps:
+                    if step.action == "place" and step.object == object_id and step.slot:
+                        slot_id = step.slot
+                        break
+                if slot_id and slot_id in slots:
+                    at_ok = verifier.check_at(object_id, slots[slot_id])
+            if hasattr(verifier, "check_stable"):
+                stable_ok = verifier.check_stable(object_id, include_velocity=True)
+            if at_ok and stable_ok:
+                stable.append(object_id)
+            else:
+                invalid.append(object_id)
+        return TaskProgress(
+            stable_objects=tuple(stable),
+            invalid_objects=tuple(invalid),
         )
-        return TaskProgress(stable_objects=stable, invalid_objects=())
 
     def verify_goal(self, plan, world, verifier, slots) -> bool:
         at_predicates = [

@@ -195,11 +195,13 @@ def test_obstacle_example_passes_complete_deterministic_pipeline(
         obstacle_states=world.obstacles,
         goal_center=world.goal_center,
         goal_area_size_xy=world.goal_area_size_xy,
-        table_size_xy=(
-            world.table_x_range[1] - world.table_x_range[0],
-            world.table_y_range[1] - world.table_y_range[0],
-        ),
-    )
+            table_size_xy=(
+                world.table_x_range[1] - world.table_x_range[0],
+                world.table_y_range[1] - world.table_y_range[0],
+            ),
+            base_xy=world.robot_base_xy,
+            base_z=world.robot_base_z,
+        )
     model = mujoco.MjModel.from_xml_path(str(scene_path))
     assert model.nbody > 0
 

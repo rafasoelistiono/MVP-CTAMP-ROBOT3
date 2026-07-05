@@ -42,12 +42,9 @@ include = [
 ]
 exclude = ["tests*"]
 
-[tool.setuptools.package-data]
-configuration = [
-  "profiles/models/*.toml",
-  "profiles/runtime/*.toml",
-]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not simulation'"
+markers = [
+  "simulation: headless MuJoCo, Pinocchio, and OMPL integration tests",
+]

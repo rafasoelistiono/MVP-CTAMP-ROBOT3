@@ -167,6 +167,8 @@ def prepare_scene_variant(
     goal_center: tuple[float, float, float] | None = None,
     goal_area_size_xy: tuple[float, float] | None = None,
     table_size_xy: tuple[float, float] | None = None,
+    base_xy: tuple[float, float] | None = None,
+    base_z: float | None = None,
 ) -> Path:
     scene_key = normalize_scene_key(raw)
     if object_states is None:
@@ -211,9 +213,10 @@ def prepare_scene_variant(
             link0_index = idx
             link0_body = body
             break
-    if scene_key == "align_grouped_tidy_wall_world" and link0_body is not None:
+    if link0_body is not None and base_xy is not None:
         base_pos = link0_body.get("pos", "-0.4 0 0.8").split()
-        link0_body.set("pos", f"{base_pos[0]} -0.18 {base_pos[2]}")
+        resolved_base_z = float(base_pos[2]) if base_z is None else float(base_z)
+        link0_body.set("pos", f"{base_xy[0]} {base_xy[1]} {resolved_base_z}")
 
     inserts = [
         _goal_area_body(
@@ -232,9 +235,11 @@ def prepare_scene_variant(
             ),
         )
     ]
+    movable_object_names: list[str] = []
     if object_states is None:
         for object_name, pos in VARIANT_OBJECTS[scene_key].items():
             inserts.append(_movable_body(object_name, pos))
+            movable_object_names.append(object_name)
     else:
         for state in object_states:
             inserts.append(
@@ -245,6 +250,7 @@ def prepare_scene_variant(
                     rgba_override=getattr(state, "rgba", None),
                 )
             )
+            movable_object_names.append(state.id)
 
     if obstacle_mode_for_scene(scene_key) == "obs":
         fixed = (
@@ -278,6 +284,27 @@ def prepare_scene_variant(
 
     for offset, body in enumerate(inserts):
         worldbody.insert(link0_index + offset, body)
+
+    if scene_key == "align_grouped_tidy_wall_world":
+        equality = root.find("equality")
+        if equality is None:
+            equality = ET.SubElement(root, "equality")
+        for weld in list(equality.findall("weld")):
+            if weld.get("name", "").startswith("carry_"):
+                equality.remove(weld)
+        for object_name in movable_object_names:
+            ET.SubElement(
+                equality,
+                "weld",
+                {
+                    "name": f"carry_{object_name}",
+                    "body1": "hand",
+                    "body2": object_name,
+                    "active": "false",
+                    "solref": "0.005 1",
+                    "solimp": "0.95 0.99 0.001",
+                },
+            )
 
     _indent(root)
     tmp_path = out_path.with_suffix(f".{os.getpid()}.tmp")

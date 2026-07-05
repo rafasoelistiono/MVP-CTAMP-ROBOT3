@@ -49,8 +49,53 @@ def estimate_align_plan_cost(
             edge_costs.append(INFEASIBLE_PENALTY)
         else:
             edge_costs.append(estimate_align_edge_cost(edge_features))
-    total = sum(edge_costs)
+    sequential_cost = _compute_sequential_retreat_cost(plan, world, slots)
+    total = sum(edge_costs) + sequential_cost
     return round(total, 6), edge_costs
+
+
+def _compute_sequential_retreat_cost(
+    plan: TaskPlan,
+    world: WorldState,
+    slots: dict[str, tuple[float, float, float]],
+) -> float:
+    """Cost from slot-to-next-pick retreat distances and deep-to-near penalty."""
+    import math
+    pairs = []
+    i = 0
+    while i < len(plan.steps) - 1:
+        if plan.steps[i].action == "pick" and plan.steps[i + 1].action == "place":
+            pairs.append((plan.steps[i].object, plan.steps[i + 1].slot or ""))
+            i += 2
+        else:
+            i += 1
+    if len(pairs) < 2:
+        return 0.0
+    retreat_cost = 0.0
+    for idx in range(len(pairs) - 1):
+        _, prev_slot_id = pairs[idx]
+        next_obj_id, _ = pairs[idx + 1]
+        prev_slot = slots.get(prev_slot_id)
+        next_obj = world.object_by_id(next_obj_id)
+        if prev_slot is not None and next_obj is not None:
+            retreat_cost += math.dist(prev_slot[:2], next_obj.pose[:2])
+    deep_near_penalty = 0.0
+    gt = world.grouped_tidy
+    if gt and gt.enabled:
+        for group in gt.groups:
+            group_slot_ids = sorted(
+                k for k in slots.keys() if k.startswith(f"{gt.slot_prefix}_{group.id}_")
+            )
+            if not group_slot_ids:
+                continue
+            placed_so_far: list[str] = []
+            for obj_id, slot_id in pairs:
+                if slot_id in group_slot_ids:
+                    slot_idx = group_slot_ids.index(slot_id)
+                    if placed_so_far:
+                        deep_near_penalty += 0.5 * slot_idx
+                    placed_so_far.append(slot_id)
+    return retreat_cost + deep_near_penalty
 
 
 def rank_candidate_plans(

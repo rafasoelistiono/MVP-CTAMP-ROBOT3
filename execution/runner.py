@@ -67,6 +67,7 @@ class TaskRunner:
         primitives: PrimitiveExecutor,
         runtime_config: RuntimeConfig | None = None,
         robust_align: bool = False,
+        runtime_module=None,
     ):
         self.plan = plan
         self.world = world
@@ -86,7 +87,15 @@ class TaskRunner:
         self.recovery = RecoveryPolicy(world.max_retries_per_object)
         self._recovery_step_id = max(step.step_id for step in plan.steps) + 1
         self._stack_rebuilds = 0
-        self._robust_align = robust_align and plan.task == "align"
+        self._align_recoveries = 0
+        from .motion_probe import requires_motion_probe
+
+        self._runtime_module = runtime_module
+        self._motion_probe_required = requires_motion_probe(world)
+        self._robust_align = (
+            plan.task == "align"
+            and (robust_align or self._motion_probe_required)
+        )
         self._robust_align_telemetry = RobustAlignTelemetry()
 
     def run(self) -> RunResult:
@@ -131,7 +140,7 @@ class TaskRunner:
         )
 
         motion_probe = MotionProbe(
-            runtime=None,
+            runtime=self._runtime_module,
             primitives=self.primitives,
             hint_cache=self.hint_cache,
         )
@@ -290,7 +299,7 @@ class TaskRunner:
             results.append(result)
             if not result.success:
                 recovered = False
-                stack_recovery_attempted = False
+                progress_recovery_attempted = False
                 if (
                     step.action in {"place", "stack_place"}
                     and (result.failure_reason or "").startswith(
@@ -301,16 +310,21 @@ class TaskRunner:
                     # picked again and placed on its intended support before
                     # the runner is allowed to advance to the next cube.
                     completed_objects.add(step.object)
-                    stack_recovery_attempted = self.plan.task == "stack"
+                    progress_recovery_attempted = self.plan.task in {"align", "stack"}
                     recovered, recovery_results = self._ensure_stable_progress(
                         completed_objects
                     )
                     results.extend(recovery_results)
                 if not recovered:
                     completed_objects.discard(step.object)
-                    failures.append(
+                    recovery_failure = (
                         "stack_rebuild_exhausted"
-                        if stack_recovery_attempted
+                        if self.plan.task == "stack"
+                        else "align_recovery_exhausted"
+                    )
+                    failures.append(
+                        recovery_failure
+                        if progress_recovery_attempted
                         else result.failure_reason or "unknown_step_failure"
                     )
                     break
@@ -328,7 +342,11 @@ class TaskRunner:
                 )
                 results.extend(recovery_results)
                 if not stable:
-                    failures.append("stack_rebuild_exhausted")
+                    failures.append(
+                        "stack_rebuild_exhausted"
+                        if self.plan.task == "stack"
+                        else "align_recovery_exhausted"
+                    )
                     break
 
         goal_ok = (
@@ -421,7 +439,81 @@ class TaskRunner:
             progress = confirmed
             if progress.valid:
                 return True, []
-        return self._rebuild_invalid_suffix(completed_objects, progress)
+        if self.plan.task == "align":
+            return self._recover_invalid_align(completed_objects, progress)
+        if self.plan.task == "stack":
+            return self._rebuild_invalid_suffix(completed_objects, progress)
+        completed_objects.intersection_update(progress.stable_objects)
+        return False, []
+
+    def _recover_invalid_align(self, completed_objects, progress):
+        results: list[StepResult] = []
+        limit = max(1, self.world.max_retries_per_object)
+        assigned_slots = {
+            step.object: step.slot
+            for step in self.plan.steps
+            if step.action == "place" and step.slot
+        }
+        recovery_attempts = 0
+        while not progress.valid and recovery_attempts < limit:
+            recovery_attempts += 1
+            self._align_recoveries += 1
+            attempt = recovery_attempts
+            self.event_log.write(
+                "ALIGN_RECOVERY",
+                "START",
+                task=self.plan.task,
+                scene_id=self.plan.scene_id,
+                attempt=attempt,
+                invalid_objects=progress.invalid_objects,
+                failure_reason=progress.reason,
+            )
+            attempt_ok = True
+            for object_id in progress.invalid_objects:
+                slot_id = assigned_slots.get(object_id)
+                if slot_id is None:
+                    attempt_ok = False
+                    break
+                if self.primitives.held_object_name() != object_id:
+                    pick_result = self._execute_step(
+                        self._recovery_step("pick", object_id)
+                    )
+                    results.append(pick_result)
+                    if not pick_result.success:
+                        attempt_ok = False
+                        break
+                place_result = self._execute_step(
+                    self._recovery_step("place", object_id, slot=slot_id)
+                )
+                results.append(place_result)
+                if not place_result.success:
+                    attempt_ok = False
+                    break
+            progress = self.plugin.assess_progress(
+                self.plan,
+                self.verifier,
+                self.slots,
+                completed_objects,
+            )
+            if attempt_ok and progress.valid:
+                self.event_log.write(
+                    "ALIGN_RECOVERY",
+                    "OK",
+                    task=self.plan.task,
+                    scene_id=self.plan.scene_id,
+                    attempt=attempt,
+                )
+                return True, results
+            self.event_log.write(
+                "ALIGN_RECOVERY",
+                "FAILED",
+                task=self.plan.task,
+                scene_id=self.plan.scene_id,
+                attempt=attempt,
+                failure_reason=progress.reason or "recovery_step_failed",
+            )
+        completed_objects.intersection_update(progress.stable_objects)
+        return False, results
 
     def _rebuild_invalid_suffix(self, completed_objects, progress):
         results: list[StepResult] = []
