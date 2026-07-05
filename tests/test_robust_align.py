@@ -70,13 +70,13 @@ def _make_world(
         robot_base_xy=(-0.4, 0.0),
         robot_reach_min=0.30,
         robot_reach_max=0.82,
-        robot_capabilities=("pick", "place", "stack_place"),
+        robot_capabilities=("pick", "place"),
         task_name=task,
         target_objects=tuple(target_objects),
         task_description="test",
         preserve_obstacles=True,
         max_retries_per_object=3,
-        allowed_predicates=("at", "on", "clear", "handempty", "holding"),
+        allowed_predicates=("at", "clear", "handempty", "holding", "stable"),
     )
 
 

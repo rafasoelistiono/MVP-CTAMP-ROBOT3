@@ -45,6 +45,7 @@ exclude = ["tests*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -m 'not simulation'"
+pythonpath = ["."]
 markers = [
   "simulation: headless MuJoCo, Pinocchio, and OMPL integration tests",
 ]

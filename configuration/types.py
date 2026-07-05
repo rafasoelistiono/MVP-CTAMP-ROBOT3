@@ -57,7 +57,6 @@ class GraspConfig:
     far_pick_xy_m: float = 0.74
     open_grip_m: float = 0.05
     place_release_lift_m: float = 0.005
-    stack_release_lift_m: float = 0.008
     release_guide_clearance_m: float = 0.008
     place_settle_before_open_steps: int = 120
     release_guide_steps: int = 240
@@ -111,19 +110,14 @@ class VerificationConfig:
     at_x_m: float = 0.055
     at_y_m: float = 0.035
     at_z_m: float = 0.050
-    on_xy_m: float = 0.045
-    on_z_m: float = 0.035
     pick_z_m: float = 0.90
-    stack_max_tilt_rad: float = 0.35
-    stack_max_linear_velocity_mps: float = 0.02
-    stack_max_angular_velocity_radps: float = 0.20
+    max_tilt_rad: float = 0.35
+    max_linear_velocity_mps: float = 0.02
+    max_angular_velocity_radps: float = 0.20
 
 
 @dataclass(frozen=True)
 class RecoveryConfig:
-    max_stack_rebuilds: int = 3
-    staging_clearance_m: float = 0.11
-    staging_grid_step_m: float = 0.10
     verification_settle_steps: int = 60
 
 
@@ -214,7 +208,6 @@ class RuntimeConfig:
             errors.append("grasp.open_grip_m must be in (0, 0.05]")
         if (
             self.grasp.place_release_lift_m < 0
-            or self.grasp.stack_release_lift_m < 0
             or self.grasp.release_guide_clearance_m <= 0
         ):
             errors.append("grasp release tuning must be positive or zero-lift")
@@ -237,24 +230,15 @@ class RuntimeConfig:
             self.verification.at_x_m,
             self.verification.at_y_m,
             self.verification.at_z_m,
-            self.verification.on_xy_m,
-            self.verification.on_z_m,
             self.verification.pick_z_m,
-            self.verification.stack_max_tilt_rad,
-            self.verification.stack_max_linear_velocity_mps,
-            self.verification.stack_max_angular_velocity_radps,
+            self.verification.max_tilt_rad,
+            self.verification.max_linear_velocity_mps,
+            self.verification.max_angular_velocity_radps,
         )
         if any(value <= 0 for value in verifier_values):
             errors.append("verification values must be positive")
-        if self.recovery.max_stack_rebuilds < 0:
-            errors.append("recovery.max_stack_rebuilds must be non-negative")
         if self.recovery.verification_settle_steps < 0:
             errors.append("recovery.verification_settle_steps must be non-negative")
-        if (
-            self.recovery.staging_clearance_m <= 0
-            or self.recovery.staging_grid_step_m <= 0
-        ):
-            errors.append("recovery staging values must be positive")
         if self.telemetry.flush_every <= 0:
             errors.append("telemetry.flush_every must be positive")
         if errors:

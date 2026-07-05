@@ -31,16 +31,6 @@ def _reject_unknown(mapping: Mapping[str, Any], allowed: set[str], path: str) ->
         )
 
 
-def _tuple2(value: Any, path: str) -> tuple[float, float]:
-    values = _ensure_sequence(value, path)
-    if len(values) != 2:
-        raise PlanLoadError(f"{path} must contain exactly two numbers")
-    try:
-        return float(values[0]), float(values[1])
-    except (TypeError, ValueError) as exc:
-        raise PlanLoadError(f"{path} must contain numbers") from exc
-
-
 def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
     data = _ensure_mapping(payload, "plan")
     required = {
@@ -65,14 +55,8 @@ def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
             "axis",
             "spacing_m",
             "row_y",
-            "row_spacing_m",
-            "row_count",
-            "base_row_length",
             "center_x",
-            "base_y",
             "base_z",
-            "base_xy",
-            "layer_height_m",
         },
         "slot_config",
     )
@@ -84,14 +68,8 @@ def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
         axis=str(slot_raw.get("axis", "x")),
         spacing_m=float(slot_raw.get("spacing_m", 0.125)),
         row_y=float(slot_raw.get("row_y", -0.06)),
-        row_spacing_m=float(slot_raw.get("row_spacing_m", 0.08)),
-        row_count=int(slot_raw.get("row_count", 0)),
-        base_row_length=int(slot_raw.get("base_row_length", 0)),
         center_x=float(slot_raw.get("center_x", 0.22)),
-        base_y=float(slot_raw.get("base_y", -0.06)),
         base_z=float(slot_raw.get("base_z", 0.83)),
-        base_xy=_tuple2(slot_raw.get("base_xy", [0.22, -0.06]), "slot_config.base_xy"),
-        layer_height_m=float(slot_raw.get("layer_height_m", 0.06)),
     )
 
     steps: list[Step] = []
@@ -104,7 +82,6 @@ def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
                 "action",
                 "object",
                 "slot",
-                "on_top_of",
                 "preconditions",
                 "effects",
             },
@@ -119,11 +96,6 @@ def parse_plan(payload: Mapping[str, Any]) -> TaskPlan:
                 action=str(item["action"]),  # type: ignore[arg-type]
                 object=str(item["object"]),
                 slot=str(item["slot"]) if item.get("slot") is not None else None,
-                on_top_of=(
-                    str(item["on_top_of"])
-                    if item.get("on_top_of") is not None
-                    else None
-                ),
                 preconditions=tuple(
                     str(value)
                     for value in _ensure_sequence(

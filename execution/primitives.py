@@ -40,17 +40,12 @@ class PrimitiveExecutor(Protocol):
 
     def settle_for_verification(self, steps: int) -> None: ...
 
-    def prepare_stack_recovery(self, object_ids: tuple[str, ...]) -> PrimitiveResult: ...
-
-    def finish_stack_recovery_staging(self) -> None: ...
-
 
 class MuJoCoExecutorPrimitives:
     """Adapter from generic task primitives to the MuJoCo IK/OMPL backend."""
 
     def __init__(self, executor_module: Any):
         self.executor = executor_module
-        self._stack_recovery_objects: tuple[str, ...] = ()
 
     def execute(
         self,
@@ -63,23 +58,7 @@ class MuJoCoExecutorPrimitives:
         try:
             self._apply_hints(step, hints)
             if step.action == "pick":
-                if self._stack_recovery_objects:
-                    # A failed disentangling attempt may itself end in contact.
-                    # Escape again before every retry, not only once per rebuild.
-                    self.executor._recover_to_safe_hover(
-                        ignored_body_names=list(self._stack_recovery_objects)
-                    )
-                    additional = [
-                        object_id
-                        for object_id in self._stack_recovery_objects
-                        if object_id != step.object
-                    ]
-                    self.executor.pick(
-                        step.object,
-                        additional_ignored_body_names=additional,
-                    )
-                else:
-                    self.executor.pick(step.object)
+                self.executor.pick(step.object)
             elif step.action == "place":
                 if target is None:
                     return PrimitiveResult(False, "missing_place_target")
@@ -89,17 +68,6 @@ class MuJoCoExecutorPrimitives:
                     step.object,
                     target_z=target[2],
                     release_lift=self.executor.CONFIG.grasp.place_release_lift_m,
-                )
-            elif step.action == "stack_place":
-                if target is None:
-                    return PrimitiveResult(False, "missing_stack_target")
-                self.executor.place(
-                    target[0],
-                    target[1],
-                    step.object,
-                    target_z=target[2],
-                    release_lift=self.executor.CONFIG.grasp.stack_release_lift_m,
-                    post_place_ignored_body_names=[],
                 )
             else:
                 return PrimitiveResult(False, f"unsupported_action:{step.action}")
@@ -193,31 +161,3 @@ class MuJoCoExecutorPrimitives:
         settle = getattr(self.executor, "_step_sim", None)
         if callable(settle) and steps > 0:
             settle(int(steps))
-
-    def prepare_stack_recovery(
-        self,
-        object_ids: tuple[str, ...],
-    ) -> PrimitiveResult:
-        """Escape a contact state before rebuilding an unstable stack suffix.
-
-        The suffix objects are ignored only during this escape motion. Normal
-        pick/place planning immediately restores the regular collision policy.
-        This is necessary because OMPL correctly rejects a start state that is
-        already touching a cube displaced by the previous arm motion.
-        """
-        recover = getattr(self.executor, "_recover_to_safe_hover", None)
-        if not callable(recover):
-            return PrimitiveResult(False, "stack_recovery_escape_unavailable")
-        try:
-            self._stack_recovery_objects = tuple(object_ids)
-            recover(ignored_body_names=list(object_ids))
-        except Exception as exc:
-            return PrimitiveResult(
-                False,
-                f"stack_recovery_escape_failed:{exc.__class__.__name__}:{exc}",
-            )
-        return PrimitiveResult(True)
-
-    def finish_stack_recovery_staging(self) -> None:
-        """Restore the normal collision policy before rebuilding the tower."""
-        self._stack_recovery_objects = ()

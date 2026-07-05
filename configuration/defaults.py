@@ -42,10 +42,6 @@ OBSTACLE_PROFILE = replace(
         min_pick_obstacle_clearance_m=0.10,
         cautious_obstacle_clearance_m=0.22,
     ),
-    recovery=replace(
-        CONSERVATIVE_PROFILE.recovery,
-        staging_clearance_m=0.13,
-    ),
 )
 
 DEFAULT_PROFILE_REGISTRY = RuntimeProfileRegistry()

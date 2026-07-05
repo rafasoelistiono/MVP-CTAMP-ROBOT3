@@ -33,7 +33,7 @@ def context_text(variant: str = "ungroup_obs", include_obstacles: bool = True) -
 - reach_min_xy: 0.30
 - reach_max_xy: 0.82
 - base_xy: [-0.4, 0.0]
-- capabilities: [pick, place, stack_place]
+- capabilities: [pick, place]
 
 ## objects
 - id: cube1
@@ -49,14 +49,14 @@ def context_text(variant: str = "ungroup_obs", include_obstacles: bool = True) -
 
 {obstacle_block}
 ## task
-- name: stack
+- name: align
 - target_objects: [cube1]
-- description: stack cube
+- description: align cube
 
 ## constraints
 - preserve_obstacles: true
 - max_retries_per_object: 3
-- allowed_predicates: [at, on, clear, handempty, holding]
+- allowed_predicates: [at, clear, handempty, holding, stable]
 """
 
 

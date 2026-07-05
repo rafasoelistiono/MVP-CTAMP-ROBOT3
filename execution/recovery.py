@@ -44,9 +44,9 @@ class RecoveryPolicy:
             return RecoveryDecision(RecoveryAction.ABORT, failure_reason)
         if step.action == "pick" and attempt <= self.max_retries_per_object:
             return RecoveryDecision(RecoveryAction.RETRY, failure_reason)
-        if step.action in {"place", "stack_place"} and object_still_held:
+        if step.action == "place" and object_still_held:
             if attempt <= self.max_retries_per_object:
                 return RecoveryDecision(RecoveryAction.RETRY, failure_reason)
-        if step.action in {"place", "stack_place"}:
+        if step.action == "place":
             return RecoveryDecision(RecoveryAction.REPLAN_REQUIRED, failure_reason)
         return RecoveryDecision(RecoveryAction.ABORT, failure_reason)

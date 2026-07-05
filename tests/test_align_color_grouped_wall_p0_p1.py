@@ -361,7 +361,7 @@ def test_p1_align_progress_uses_observed_pose(world, plan, slots):
     assert "a" in progress.invalid_objects
 
 
-def test_p1_align_recovery_repeats_pick_place_without_stacking(
+def test_p1_align_recovery_repeats_pick_place_only(
     world, plan, slots, variant_config, tmp_path
 ):
     class MissFirstPlacePrimitives:

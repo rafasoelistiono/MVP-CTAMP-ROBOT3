@@ -20,7 +20,7 @@ def test_run_manifest_records_full_resolved_config_and_hashes(tmp_path):
         context_file=context,
         scene_id="scene-1",
         scene_variant="group_obs",
-        task="stack",
+        task="align",
         plugin_package="plugins",
         plan_source="original_no_llm",
         benchmark_role="reference",

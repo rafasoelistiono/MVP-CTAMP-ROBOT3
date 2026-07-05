@@ -62,8 +62,8 @@ def test_long_obstacles_are_fixed_and_use_configured_height():
 
 def test_summary_records_runtime_provenance(tmp_path):
     path = write_summary_csv(
-        "stack",
-        "group_no_obs",
+        "align",
+        "align_grouped_tidy_wall_world",
         {
             "success": True,
             "objects_moved": 1,
@@ -90,4 +90,4 @@ def test_summary_records_runtime_provenance(tmp_path):
     assert row["reference_100_percent"] == "true"
     assert row["run_id"] == "20260622_120000_qwen_3_coder"
     assert row["experiment_label"] == "qwen_3_coder"
-    assert path.name == "stack_group_no_obs_20260622_120000_qwen_3_coder.csv"
+    assert path.name == "align_align_grouped_tidy_wall_world_20260622_120000_qwen_3_coder.csv"

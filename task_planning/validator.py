@@ -46,19 +46,14 @@ def _gate_1_schema(plan: TaskPlan) -> None:
         raise PlanValidationError(
             f"gate 1: task name must be a lowercase plugin identifier, got {plan.task!r}"
         )
-    if plan.slot_config.type not in {"line", "tower", "pyramid"}:
+    if plan.slot_config.type != "line":
         raise PlanValidationError(
-            f"gate 1: slot_config.type must be 'line', 'tower', or 'pyramid', "
-            f"got {plan.slot_config.type!r}"
+            f"gate 1: slot_config.type must be 'line', got {plan.slot_config.type!r}"
         )
     if plan.slot_config.axis not in {"x", "y"}:
         raise PlanValidationError("gate 1: slot axis must be 'x' or 'y'")
     if plan.slot_config.spacing_m <= 0:
         raise PlanValidationError("gate 1: slot spacing must be positive")
-    if plan.slot_config.layer_height_m <= 0:
-        raise PlanValidationError("gate 1: tower layer height must be positive")
-    if plan.slot_config.type == "pyramid":
-        _validate_pyramid_slot_schema(plan)
     if not plan.scene_id.strip():
         raise PlanValidationError("gate 1: scene_id must not be empty")
     if not plan.steps:
@@ -82,32 +77,6 @@ def _gate_1_schema(plan: TaskPlan) -> None:
             raise PlanValidationError(
                 f"gate 1: place step {step.step_id} requires slot"
             )
-        if step.action == "stack_place" and not step.on_top_of:
-            raise PlanValidationError(
-                f"gate 1: stack_place step {step.step_id} requires on_top_of"
-            )
-
-
-def _validate_pyramid_slot_schema(plan: TaskPlan) -> None:
-    config = plan.slot_config
-    if config.row_count <= 0:
-        raise PlanValidationError("gate 1: pyramid row_count must be positive")
-    if config.base_row_length <= 0:
-        raise PlanValidationError("gate 1: pyramid base_row_length must be positive")
-    if config.row_count != config.base_row_length:
-        raise PlanValidationError(
-            "gate 1: pyramid row_count must equal base_row_length for a 4-3-2-1 style task"
-        )
-    expected_targets = config.row_count * (config.row_count + 1) // 2
-    if expected_targets != len(plan.target_objects):
-        raise PlanValidationError(
-            "gate 1: pyramid target count must equal "
-            f"row_count*(row_count+1)/2; expected {expected_targets}, "
-            f"got {len(plan.target_objects)}"
-        )
-    if config.row_spacing_m <= 0:
-        raise PlanValidationError("gate 1: pyramid row_spacing_m must be positive")
-
 
 def _gate_2_object_whitelist(
     plan: TaskPlan,
@@ -116,8 +85,6 @@ def _gate_2_object_whitelist(
     referenced = set(plan.target_objects)
     for step in plan.steps:
         referenced.add(step.object)
-        if step.on_top_of:
-            referenced.add(step.on_top_of)
         for expression in step.preconditions + step.effects:
             match = _PREDICATE_RE.match(expression)
             if match is not None:
@@ -150,9 +117,7 @@ def _predicate_object_args(name: str, raw_args) -> set[str]:
         return set()
     if name == "at":
         return set(args[:1])
-    if name == "on":
-        return set(args[:2])
-    if name in {"clear", "holding"}:
+    if name in {"clear", "holding", "stable"}:
         return set(args[:1])
     return set()
 
@@ -213,18 +178,6 @@ def _gate_4_action_sequence(plan: TaskPlan) -> None:
                 f"gate 4: step {step.step_id} {step.action}({step.object}) "
                 f"requires holding that object; currently held: {held!r}"
             )
-
-        if step.action == "stack_place":
-            support = step.on_top_of
-            if support == step.object:
-                raise PlanValidationError(
-                    f"gate 4: step {step.step_id} cannot stack an object on itself"
-                )
-            if support not in placed:
-                raise PlanValidationError(
-                    f"gate 4: support object {support!r} has not been placed "
-                    f"before step {step.step_id}"
-                )
 
         placed.add(step.object)
         held = None

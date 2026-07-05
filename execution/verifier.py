@@ -27,22 +27,18 @@ class ObservedPredicateVerifier:
     def __init__(
         self,
         provider: PoseProvider,
-        layer_height_m: float = 0.06,
         config: VerificationConfig | None = None,
     ):
         self.provider = provider
-        self.layer_height_m = float(layer_height_m)
         configured = config or VerificationConfig()
         self.tolerances = {
             "at_x_m": configured.at_x_m,
             "at_y_m": configured.at_y_m,
             "at_z_m": configured.at_z_m,
-            "on_xy_m": configured.on_xy_m,
-            "on_z_m": configured.on_z_m,
             "pick_z_m": configured.pick_z_m,
-            "stack_max_tilt_rad": configured.stack_max_tilt_rad,
-            "stack_max_linear_velocity_mps": configured.stack_max_linear_velocity_mps,
-            "stack_max_angular_velocity_radps": configured.stack_max_angular_velocity_radps,
+            "max_tilt_rad": configured.max_tilt_rad,
+            "max_linear_velocity_mps": configured.max_linear_velocity_mps,
+            "max_angular_velocity_radps": configured.max_angular_velocity_radps,
         }
 
     def check_at(
@@ -55,20 +51,6 @@ class ObservedPredicateVerifier:
             abs(actual[0] - slot_pose[0]) <= self.tolerances["at_x_m"]
             and abs(actual[1] - slot_pose[1]) <= self.tolerances["at_y_m"]
             and abs(actual[2] - slot_pose[2]) <= self.tolerances["at_z_m"]
-        )
-
-    def check_on(self, upper_id: str, lower_id: str) -> bool:
-        upper = self.provider.object_pose(upper_id)
-        lower = self.provider.object_pose(lower_id)
-        xy_error = math.dist(upper[:2], lower[:2])
-        expected_height = self.layer_height_m
-        extent = getattr(self.provider, "object_vertical_half_extent", None)
-        if callable(extent):
-            expected_height = float(extent(upper_id)) + float(extent(lower_id))
-        z_error = abs((upper[2] - lower[2]) - expected_height)
-        return (
-            xy_error <= self.tolerances["on_xy_m"]
-            and z_error <= self.tolerances["on_z_m"]
         )
 
     def check_stable(self, obj_id: str, *, include_velocity: bool = False) -> bool:
@@ -106,7 +88,7 @@ class ObservedPredicateVerifier:
                 for value in world_z_alignments
             )
             tilt = math.acos(world_z_alignment)
-            if tilt > self.tolerances["stack_max_tilt_rad"]:
+            if tilt > self.tolerances["max_tilt_rad"]:
                 return f"tilt:{tilt:.4f}"
 
         velocity_fn = getattr(self.provider, "object_velocity", None)
@@ -114,9 +96,9 @@ class ObservedPredicateVerifier:
             linear, angular = velocity_fn(obj_id)
             linear_speed = math.sqrt(sum(value * value for value in linear))
             angular_speed = math.sqrt(sum(value * value for value in angular))
-            if linear_speed > self.tolerances["stack_max_linear_velocity_mps"]:
+            if linear_speed > self.tolerances["max_linear_velocity_mps"]:
                 return f"linear_velocity:{linear_speed:.4f}"
-            if angular_speed > self.tolerances["stack_max_angular_velocity_radps"]:
+            if angular_speed > self.tolerances["max_angular_velocity_radps"]:
                 return f"angular_velocity:{angular_speed:.4f}"
         return None
 
@@ -126,8 +108,8 @@ class ObservedPredicateVerifier:
             if other_id == obj_id:
                 continue
             if (
-                math.dist(base[:2], pose[:2]) <= self.tolerances["on_xy_m"]
-                and pose[2] > base[2] + self.layer_height_m / 2.0
+                math.dist(base[:2], pose[:2]) <= self.tolerances["at_x_m"]
+                and pose[2] > base[2] + self.tolerances["at_z_m"]
             ):
                 return False
         return True
@@ -226,12 +208,12 @@ class ObservedPredicateVerifier:
         if name == "at" and len(args) == 2:
             slot_id = args[1]
             return slot_id in slots and self.check_at(args[0], slots[slot_id])
-        if name == "on" and len(args) == 2:
-            return self.check_on(args[0], args[1])
         if name == "clear" and len(args) == 1:
             return self.check_clear(args[0])
         if name == "handempty" and not args:
             return self.check_handempty()
         if name == "holding" and len(args) == 1:
             return self.check_holding(args[0])
+        if name == "stable" and len(args) == 1:
+            return self.check_stable(args[0], include_velocity=True)
         return False

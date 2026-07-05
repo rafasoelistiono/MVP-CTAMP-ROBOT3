@@ -25,10 +25,7 @@ def test_code_profiles_select_scene_specific_tuning():
     assert obstacle.grasp.open_grip_m == 0.05
     assert obstacle.grasp.pick_grip_sequence == (0.026, 0.025, 0.024)
     assert obstacle.grasp.obstacle_cube_grip == 0.026
-    assert obstacle.grasp.stack_release_lift_m == 0.008
     assert obstacle.grasp.release_guide_clearance_m == 0.008
-    assert obstacle.recovery.max_stack_rebuilds == 3
-    assert obstacle.recovery.staging_clearance_m == 0.13
     assert obstacle.recovery.verification_settle_steps == 60
 
 

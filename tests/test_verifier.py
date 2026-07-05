@@ -45,18 +45,6 @@ def test_at_outside_tolerance():
     assert not verifier.check_at("cube1", (0.22, -0.06, 0.83))
 
 
-def test_on_with_correct_stack_height():
-    verifier = ObservedPredicateVerifier(
-        FakeProvider(
-            {
-                "cube1": (0.22, -0.06, 0.83),
-                "cube2": (0.225, -0.058, 0.89),
-            }
-        )
-    )
-    assert verifier.check_on("cube2", "cube1")
-
-
 def test_holding_requires_live_held_identity_and_height():
     verifier = ObservedPredicateVerifier(
         FakeProvider({"cube1": (0.1, 0.1, 0.95)}, held="cube1")
@@ -65,7 +53,7 @@ def test_holding_requires_live_held_identity_and_height():
     assert not verifier.check_handempty()
 
 
-def test_stack_rejects_tilted_or_moving_cube():
+def test_stability_rejects_tilted_or_moving_cube():
     poses = {
         "cube1": (0.22, -0.06, 0.83),
         "cube2": (0.22, -0.06, 0.89),
@@ -80,7 +68,6 @@ def test_stack_rejects_tilted_or_moving_cube():
         {"cube1": still, "cube2": still},
     )
     verifier = ObservedPredicateVerifier(provider)
-    assert verifier.check_on("cube2", "cube1")
     assert not verifier.check_stable("cube2")
 
     provider.orientations["cube2"] = (0.7071, 0.7071, 0.0, 0.0)
@@ -89,5 +76,4 @@ def test_stack_rejects_tilted_or_moving_cube():
     provider.orientations["cube2"] = (1.0, 0.0, 0.0, 0.0)
     provider.velocities["cube2"] = ((0.05, 0.0, 0.0), (0.0, 0.0, 0.0))
     verifier = ObservedPredicateVerifier(provider)
-    assert verifier.check_on("cube2", "cube1")
     assert not verifier.check_stable("cube2", include_velocity=True)

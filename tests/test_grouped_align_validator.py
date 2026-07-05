@@ -122,11 +122,9 @@ def test_unknown_object_rejected(world, gt, slots):
         plugin.validate_plan(plan, world)
 
 
-def test_stack_place_action_rejected(world, gt, slots):
+def test_unsupported_action_rejected(world, gt, slots):
     payload = _make_plan(world, gt, slots)
-    payload["steps"][1]["action"] = "stack_place"
-    payload["steps"][1].pop("slot", None)
-    payload["steps"][1]["on_top_of"] = "b"
+    payload["steps"][1]["action"] = "teleport"
     plan = parse_plan(payload)
     with pytest.raises(PlanValidationError, match="does not support"):
         plugin = DEFAULT_REGISTRY.get("align")

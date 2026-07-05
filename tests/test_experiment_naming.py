@@ -7,14 +7,14 @@ from telemetry.naming import (
 
 def test_label_is_inferred_from_response_or_generated_plan_name():
     assert infer_experiment_label(
-        "ungroup_obs_stack_cubes_qwen_3_coder.json",
-        scene_id="ungroup_obs_stack_cubes",
-        task="stack",
+        "align_grouped_tidy_wall_world_qwen_3_coder.json",
+        scene_id="align_grouped_tidy_wall_world",
+        task="align",
     ) == "qwen_3_coder"
     assert infer_experiment_label(
-        "ungroup_obs_stack_cubes_stack_qwen_3_coder.json",
-        scene_id="ungroup_obs_stack_cubes",
-        task="stack",
+        "align_grouped_tidy_wall_world_align_qwen_3_coder.json",
+        scene_id="align_grouped_tidy_wall_world",
+        task="align",
     ) == "qwen_3_coder"
 
 

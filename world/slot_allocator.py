@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
-
 from task_planning.types import SlotConfig
 
 from .state import GroupedTidyConfig, TidyGroup, WorldState
@@ -20,10 +18,6 @@ def allocate_slots(
         raise SlotAllocationError("slot count must be positive")
     if config.type == "line":
         return _allocate_line(config, n)
-    if config.type == "tower":
-        return _allocate_tower(config, n)
-    if config.type == "pyramid":
-        return resolve_pyramid_slots(config, tuple(f"cube{index + 1}" for index in range(n)))
     raise SlotAllocationError(f"unknown slot type: {config.type}")
 
 
@@ -43,64 +37,6 @@ def _allocate_line(
         )
         for index in range(n)
     }
-
-
-def _allocate_tower(
-    config: SlotConfig,
-    n: int,
-) -> dict[str, tuple[float, float, float]]:
-    bx, by = config.base_xy
-    slots: dict[str, tuple[float, float, float]] = {}
-    for index in range(n):
-        label = "tower_base" if index == 0 else f"level_{index}"
-        slots[label] = (
-            bx,
-            by,
-            config.base_z + index * config.layer_height_m,
-        )
-    return slots
-
-
-def resolve_pyramid_slots(
-    config: SlotConfig,
-    target_objects: Sequence[str],
-) -> dict[str, tuple[float, float, float]]:
-    if config.axis != "x":
-        raise SlotAllocationError("only pyramid row axis 'x' is currently supported")
-    if config.row_count <= 0:
-        raise SlotAllocationError("pyramid row_count must be positive")
-    if config.base_row_length <= 0:
-        raise SlotAllocationError("pyramid base_row_length must be positive")
-    expected = config.row_count * (config.row_count + 1) // 2
-    if len(target_objects) != expected:
-        raise SlotAllocationError(
-            "pyramid slot count must equal row_count*(row_count+1)/2: "
-            f"expected {expected}, got {len(target_objects)}"
-        )
-
-    slots: dict[str, tuple[float, float, float]] = {}
-    assigned = 0
-    for row in range(config.row_count):
-        row_length = config.base_row_length - row
-        if row_length <= 0:
-            raise SlotAllocationError(
-                f"pyramid row {row} has non-positive length {row_length}"
-            )
-        start_x = config.center_x - ((row_length - 1) / 2.0) * config.spacing_m
-        y = config.base_y
-        z = config.base_z + row * config.layer_height_m
-        for column in range(row_length):
-            if assigned >= len(target_objects):
-                raise SlotAllocationError("pyramid target_objects ended before slots")
-            slots[f"row{row}_col{column}"] = (
-                start_x + column * config.spacing_m,
-                y,
-                z,
-            )
-            assigned += 1
-    return slots
-
-
 def validate_slots(
     slots: dict[str, tuple[float, float, float]],
     world: WorldState,

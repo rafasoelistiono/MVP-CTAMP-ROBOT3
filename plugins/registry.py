@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from plugins.align_task import PLUGIN as ALIGN_PLUGIN
 from plugins.protocol import TaskPlugin
-from plugins.pyramid_task import PLUGIN as PYRAMID_PLUGIN
-from plugins.stack_task import PLUGIN as STACK_PLUGIN
 
 
 TASK_PLUGIN_API_VERSION = "ctamp-task/v2"
@@ -43,7 +41,7 @@ class PluginRegistry:
             raise ValueError(
                 f"Task {task_name!r} tidak terdaftar. "
                 f"Tersedia: {sorted(self._plugins)}. "
-                "Task yang didukung: align, pyramid, stack."
+                "Task yang didukung: align."
             )
         return self._plugins[task_name]
 
@@ -53,8 +51,7 @@ class PluginRegistry:
 
 def _default_registry() -> PluginRegistry:
     registry = PluginRegistry()
-    for plugin in (ALIGN_PLUGIN, PYRAMID_PLUGIN, STACK_PLUGIN):
-        registry.register(plugin)
+    registry.register(ALIGN_PLUGIN)
     return registry
 
 
