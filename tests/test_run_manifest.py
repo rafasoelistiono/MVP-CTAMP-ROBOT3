@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from configuration import load_runtime_config
-from telemetry import sha256_file, write_run_manifest
+from telemetry import finalize_run_manifest, sha256_file, write_run_manifest
 
 
 def test_run_manifest_records_full_resolved_config_and_hashes(tmp_path):
@@ -29,10 +29,31 @@ def test_run_manifest_records_full_resolved_config_and_hashes(tmp_path):
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "ctamp-run-manifest/v1"
     assert payload["plan"]["sha256"] == sha256_file(plan)
-    assert payload["runtime_config"]["motion"]["time_limit_s"] == 8.0
+    assert payload["runtime_config"]["motion"]["time_limit_s"] == 12.0
+    assert payload["runtime_config"]["motion"]["sampler_range"] == 0.04
     assert payload["runtime_config"]["model"]["xml_path"].endswith("panda.xml")
     assert payload["benchmark"] == {
         "plan_source": "original_no_llm",
         "role": "reference",
         "label": "original-v1",
+    }
+
+    finalize_run_manifest(
+        output,
+        success=True,
+        objects_moved=12,
+        objects_total=12,
+        collision_count=0,
+        lane_assignment_valid=True,
+        ik_orientation_error_count=0,
+    )
+    finalized = json.loads(output.read_text(encoding="utf-8"))
+    assert finalized["success_rate"] is True
+    assert finalized["object_success_rate"] == 1.0
+    assert finalized["result"] == {
+        "objects_moved": 12,
+        "objects_total": 12,
+        "collision_count": 0,
+        "lane_assignment_valid": True,
+        "ik_orientation_error_above_limit_count": 0,
     }

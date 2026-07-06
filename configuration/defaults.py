@@ -35,8 +35,28 @@ CONSERVATIVE_PROFILE = RuntimeConfig(name="conservative", model=PANDA_MODEL)
 OBSTACLE_PROFILE = replace(
     CONSERVATIVE_PROFILE,
     name="obstacle",
+    model=replace(
+        CONSERVATIVE_PROFILE.model,
+        wall_right_q=(
+            0.305267,
+            0.563609,
+            -0.024401,
+            -1.841814,
+            0.019420,
+            2.405206,
+            1.055646,
+        ),
+    ),
     ik=replace(CONSERVATIVE_PROFILE.ik, max_valid_candidates=8),
-    motion=replace(CONSERVATIVE_PROFILE.motion, time_limit_s=8.0),
+    motion=replace(
+        CONSERVATIVE_PROFILE.motion,
+        planner="RRTConnect",
+        time_limit_s=12.0,
+        sampler_range=0.03,
+        valid_state_sampler="gaussian",
+        probe_time_limit_s=10.0,
+        probe_segment_time_limit_s=3.0,
+    ),
     safety=replace(
         CONSERVATIVE_PROFILE.safety,
         min_pick_obstacle_clearance_m=0.10,

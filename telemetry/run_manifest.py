@@ -88,6 +88,41 @@ def write_run_manifest(
     return output
 
 
+def finalize_run_manifest(
+    path: str | Path,
+    *,
+    success: bool,
+    objects_moved: int,
+    objects_total: int,
+    collision_count: int,
+    lane_assignment_valid: bool,
+    ik_orientation_error_count: int,
+) -> Path:
+    output = Path(path)
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    payload["success"] = bool(success)
+    # Retain the task's boolean acceptance terminology and also expose the
+    # conventional numeric object rate.
+    payload["success_rate"] = bool(success)
+    payload["object_success_rate"] = (
+        round(objects_moved / objects_total, 4) if objects_total else 0.0
+    )
+    payload["result"] = {
+        "objects_moved": int(objects_moved),
+        "objects_total": int(objects_total),
+        "collision_count": int(collision_count),
+        "lane_assignment_valid": bool(lane_assignment_valid),
+        "ik_orientation_error_above_limit_count": int(
+            ik_orientation_error_count
+        ),
+    }
+    output.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return output
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)

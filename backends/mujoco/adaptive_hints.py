@@ -99,6 +99,7 @@ class HintCache:
         near_miss_factor: float = _D_NEAR_MISS_FACTOR,
         tolerance_headroom: float = _D_TOLERANCE_HEADROOM,
         max_tolerance_factor: float = _D_MAX_TOLERANCE_FACTOR,
+        config_fingerprint: Optional[str] = None,
     ):
         self._min_samples = int(min_samples)
         self._pinocchio_skip_rate = float(pinocchio_skip_rate)
@@ -106,6 +107,7 @@ class HintCache:
         self._near_miss_factor = float(near_miss_factor)
         self._tolerance_headroom = float(tolerance_headroom)
         self._max_tol_factor = float(max_tolerance_factor)
+        self._config_fingerprint = config_fingerprint
 
         self._pinocchio_skip: bool = False
         self._pos_err_hints: dict[tuple, float] = {}
@@ -117,6 +119,9 @@ class HintCache:
             "pinocchio_fallback_rate": None,
             "pos_err_hints": {},
             "profile_hints": {},
+            "config_fingerprint": config_fingerprint,
+            "fingerprint_files_accepted": 0,
+            "fingerprint_files_ignored": 0,
         }
 
         rows = self._load_rows(log_dir, max_log_age_days, scene_filter)
@@ -182,6 +187,22 @@ class HintCache:
                         continue
                     with path.open(newline="", encoding="utf-8") as f:
                         file_rows = list(csv.DictReader(f))
+                    if self._config_fingerprint is not None:
+                        fingerprints = set()
+                        for row in file_rows:
+                            if row.get("stage") != "RUNTIME_FINGERPRINT":
+                                continue
+                            try:
+                                extra = json.loads(row.get("extra_json", "{}") or "{}")
+                                value = str(extra.get("config_fingerprint", ""))
+                                if value:
+                                    fingerprints.add(value)
+                            except Exception:
+                                continue
+                        if self._config_fingerprint not in fingerprints:
+                            self._stats["fingerprint_files_ignored"] += 1
+                            continue
+                        self._stats["fingerprint_files_accepted"] += 1
                     rows.extend(file_rows)
                     logs_loaded += 1
                 except Exception:

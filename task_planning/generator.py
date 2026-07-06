@@ -242,6 +242,26 @@ def build_task_prompt(context_text: str, world: Any, slots: dict) -> str:
     }
 
     n_steps = len(world.target_objects) * 2
+    slot_list = ", ".join(sorted(slots))
+    wall = next(
+        (obstacle for obstacle in world.obstacles if obstacle.kind == "wall"),
+        None,
+    )
+    if wall is not None and wall.size is not None:
+        wall_aabb = (
+            f"x=[{wall.pose[0] - wall.size[0] / 2.0:.2f}, "
+            f"{wall.pose[0] + wall.size[0] / 2.0:.2f}], "
+            f"y=[{wall.pose[1] - wall.size[1] / 2.0:.2f}, "
+            f"{wall.pose[1] + wall.size[1] / 2.0:.2f}], "
+            f"z=[{wall.pose[2] - wall.size[2] / 2.0:.2f}, "
+            f"{wall.pose[2] + wall.size[2] / 2.0:.2f}]"
+        )
+        wall_right_edge = wall.pose[0] + wall.size[0] / 2.0
+        slot_right_min = wall_right_edge + 0.05
+    else:
+        wall_aabb = "none"
+        wall_right_edge = 0.0
+        slot_right_min = 0.0
 
     prompt = f"""You are a task planner for a Franka Panda table-top manipulator.
 
@@ -263,6 +283,27 @@ Tidy Groups:
 
 SCHEMA VERSION: {SCHEMA_VERSION}
 REQUIRED STEPS: {n_steps} (alternating pick/place for {len(world.target_objects)} cubes)
+
+WALL GEOMETRY (hard constraint):
+  Wall AABB: {wall_aabb}
+  The arm CANNOT pass through this wall.
+  All target slots are at x > {slot_right_min:.2f} on the right flank.
+  Approach all cubes through the right flank (x > {wall_right_edge:.2f} side) only.
+
+COLOR ASSIGNMENT (fixed, non-negotiable):
+  blue cubes -> tidy_slot_blue_lane_* slots
+  red cubes  -> tidy_slot_red_lane_* slots
+
+PICK ORDERING:
+  Process cubes with highest Y first within each color group.
+  Interleave: pick one blue, pick one red, alternating.
+
+JSON CONTRACT:
+  Exactly {n_steps} steps ({len(world.target_objects)} pick + {len(world.target_objects)} place).
+  Every cube appears exactly once as a pick and once as a place.
+  Every slot appears at most once.
+  Do NOT invent new slot names. Use only: {slot_list}
+  Do NOT output joint angles, coordinates, or trajectories.
 
 TASKPLAN JSON SCHEMA:
 {{

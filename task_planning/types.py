@@ -60,6 +60,10 @@ class ProbeResult:
     min_clearance: float = 0.0
     collision_count: int = 0
     failure_reason: str | None = None
+    grasp_diagnostics: tuple[dict, ...] = ()
+    timeout_phase: str | None = None
+    attempted_orientations: int = 0
+    attempted_seeds: int = 0
 
 
 @dataclass(frozen=True)

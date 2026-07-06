@@ -18,6 +18,7 @@ class ModelConfig:
     desired_tool_z: tuple[float, float, float] = (0.0, 0.0, -1.0)
     desired_tool_x: tuple[float, float, float] | None = None
     obstacle_body_names: tuple[str, ...] = ()
+    obstacle_kinds: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class MotionConfig:
     final_settle_steps: int = 40
     valid_state_sampler: str | None = None
     optimization_planner: str | None = None
+    probe_time_limit_s: float = 2.0
+    probe_segment_time_limit_s: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,19 @@ class RuntimeConfig:
                 errors.append("model.desired_tool_x must contain 3 values")
             elif sum(value * value for value in self.model.desired_tool_x) <= 1e-12:
                 errors.append("model.desired_tool_x must be non-zero")
+        obstacle_names = set(self.model.obstacle_body_names)
+        kind_names = [name for name, _ in self.model.obstacle_kinds]
+        if len(kind_names) != len(set(kind_names)):
+            errors.append("model.obstacle_kinds contains duplicate body names")
+        if set(kind_names) != obstacle_names:
+            errors.append(
+                "model.obstacle_kinds names must exactly match model.obstacle_body_names"
+            )
+        invalid_kinds = sorted(
+            {kind for _, kind in self.model.obstacle_kinds} - {"obstacle", "wall"}
+        )
+        if invalid_kinds:
+            errors.append("model.obstacle_kinds contains unsupported kinds")
         if self.ik.backend not in {"auto", "pinocchio", "mujoco_dls"}:
             errors.append("ik.backend must be auto, pinocchio, or mujoco_dls")
         if not 0 < self.ik.plan_position_error_m <= 0.030:
@@ -185,9 +201,19 @@ class RuntimeConfig:
             errors.append("IK candidate and attempt limits must be positive")
         if self.motion.time_limit_s <= 0 or self.motion.waypoint_step <= 0:
             errors.append("motion time limit and waypoint step must be positive")
-        if self.motion.valid_state_sampler not in {None, "uniform", "obstacle_based"}:
+        if (
+            self.motion.probe_time_limit_s <= 0
+            or self.motion.probe_segment_time_limit_s <= 0
+        ):
+            errors.append("motion probe total and segment limits must be positive")
+        if self.motion.valid_state_sampler not in {
+            None,
+            "uniform",
+            "obstacle_based",
+            "gaussian",
+        }:
             errors.append(
-                "motion.valid_state_sampler must be uniform, obstacle_based, or unset"
+                "motion.valid_state_sampler must be uniform, obstacle_based, gaussian, or unset"
             )
         if self.motion.optimization_planner is not None and (
             self.motion.optimization_planner.strip().lower()

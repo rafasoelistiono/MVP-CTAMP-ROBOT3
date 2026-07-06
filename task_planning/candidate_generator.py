@@ -20,6 +20,7 @@ def generate_align_candidates(
     candidates: list[TaskPlan] = []
     if world.grouped_tidy and world.grouped_tidy.enabled:
         generators = [
+            ("grouped_wall_aware_deep_first", generate_grouped_tidy_wall_aware_plan),
             ("grouped_nearest_first", generate_grouped_tidy_nearest_first_plan),
             ("grouped_obstacle_aware", generate_grouped_tidy_obstacle_aware_plan),
             ("grouped_nearest_to_slot", generate_grouped_tidy_nearest_to_slot_plan),
@@ -264,6 +265,83 @@ def generate_grouped_tidy_deep_first_plan(
     )
 
 
+def generate_grouped_tidy_wall_aware_plan(
+    world: WorldState,
+    slots: dict[str, tuple[float, float, float]],
+) -> TaskPlan:
+    """Deterministic wall-aware order with deepest lane slots filled first."""
+    gt = world.grouped_tidy
+    if not gt or not gt.enabled:
+        return None  # type: ignore[return-value]
+    wall = next(
+        (obstacle for obstacle in world.obstacles if obstacle.kind == "wall"),
+        None,
+    )
+    if wall is None or wall.size is None:
+        return generate_grouped_tidy_deep_first_plan(world, slots)
+
+    wall_min_x = wall.pose[0] - wall.size[0] / 2.0
+    wall_max_x = wall.pose[0] + wall.size[0] / 2.0
+    wall_min_y = wall.pose[1] - wall.size[1] / 2.0
+    wall_max_y = wall.pose[1] + wall.size[1] / 2.0
+
+    def wall_clearance(pose: tuple[float, float, float]) -> float:
+        dx = max(wall_min_x - pose[0], 0.0, pose[0] - wall_max_x)
+        dy = max(wall_min_y - pose[1], 0.0, pose[1] - wall_max_y)
+        return math.hypot(dx, dy)
+
+    group_orders: list[list[str]] = []
+    assignment: dict[str, str] = {}
+    for group in gt.groups:
+        deepest_slots = sorted(
+            (
+                slot_id
+                for slot_id in slots
+                if slot_id.startswith(f"{gt.slot_prefix}_{group.id}_")
+            ),
+            key=lambda slot_id: (slots[slot_id][1], slot_id),
+            reverse=True,
+        )
+        remaining = list(group.objects)
+        group_order: list[str] = []
+        for slot_id in deepest_slots:
+            slot_pose = slots[slot_id]
+
+            def object_priority(object_id: str) -> tuple[bool, float, float, str]:
+                obj = world.object_by_id(object_id)
+                if obj is None:
+                    return True, float("inf"), float("inf"), object_id
+                clearance = wall_clearance(obj.pose)
+                return (
+                    clearance <= 0.06,
+                    -clearance,
+                    math.dist(obj.pose[:2], slot_pose[:2]),
+                    object_id,
+                )
+
+            selected = min(remaining, key=object_priority)
+            remaining.remove(selected)
+            assignment[selected] = slot_id
+            group_order.append(selected)
+        group_orders.append(group_order)
+
+    # Round-robin preserves deepest-first order within each color while
+    # avoiding a full lane becoming an obstacle before the other lane starts.
+    ordered_objects: list[str] = []
+    while any(group_orders):
+        for group_order in group_orders:
+            if group_order:
+                ordered_objects.append(group_order.pop(0))
+
+    return _build_grouped_align_plan_from_assignment(
+        world,
+        ordered_objects,
+        assignment,
+        gt,
+        "grouped_wall_aware_deep_first",
+    )
+
+
 def _build_grouped_align_plan(
     world: WorldState,
     ordered_object_ids: list[str],
@@ -286,6 +364,22 @@ def _build_grouped_align_plan(
             )
         )
 
+    return _build_grouped_align_plan_from_assignment(
+        world,
+        ordered_object_ids,
+        object_to_slot,
+        gt,
+        method,
+    )
+
+
+def _build_grouped_align_plan_from_assignment(
+    world: WorldState,
+    ordered_object_ids: list[str],
+    object_to_slot: dict[str, str],
+    gt: "GroupedTidyConfig",
+    method: str,
+) -> TaskPlan:
     steps: list[Step] = []
     for idx, object_id in enumerate(ordered_object_ids):
         slot_id = object_to_slot.get(object_id, "")

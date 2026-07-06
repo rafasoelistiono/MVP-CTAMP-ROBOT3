@@ -71,7 +71,7 @@ def test_wall_probe_uses_right_gateway_without_mutating_simulation():
         )
         assert report["success"], report
         assert report["route"] == "wall_right"
-        assert report["segment_count"] == 4
+        assert report["segment_count"] == 2
         assert report["waypoint_count"] > 4
         assert np.array_equal(runtime.data.qpos, qpos_before)
         assert np.array_equal(runtime.data.qvel, qvel_before)

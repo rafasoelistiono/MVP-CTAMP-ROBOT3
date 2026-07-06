@@ -375,6 +375,14 @@ def build_world_state(path: str | Path) -> WorldState:
         raise ContextValidationError("section '## obstacles' must be a record list")
     obstacles: list[ObstacleState] = []
     obstacle_ids: set[str] = set()
+    challenge_record = sections.get("challenge", {})
+    challenge_wall_ids = {
+        str(value)
+        for value in challenge_record.get("obstacle_ids", [])
+    } if (
+        isinstance(challenge_record, dict)
+        and str(challenge_record.get("type", "")) == "frontal_tall_wall"
+    ) else set()
     for index, raw in enumerate(obstacle_rows):
         required = {"id", "pose", "fragile", "radius", "height"}
         missing = sorted(required - set(raw))
@@ -397,6 +405,20 @@ def build_world_state(path: str | Path) -> WorldState:
             raise ContextValidationError(
                 f"obstacles[{index}].fragile must be true or false"
             )
+        kind = str(
+            raw.get(
+                "kind",
+                "wall" if obstacle_id in challenge_wall_ids else "obstacle",
+            )
+        ).strip().lower()
+        if kind not in {"obstacle", "wall"}:
+            raise ContextValidationError(
+                f"obstacles[{index}].kind must be 'obstacle' or 'wall'"
+            )
+        if kind == "wall" and "size" not in raw:
+            raise ContextValidationError(
+                f"obstacles[{index}] kind='wall' requires an explicit size"
+            )
         obstacles.append(
             ObstacleState(
                 id=obstacle_id,
@@ -409,6 +431,7 @@ def build_world_state(path: str | Path) -> WorldState:
                     if "size" in raw
                     else None
                 ),
+                kind=kind,  # type: ignore[arg-type]
             )
         )
 

@@ -117,15 +117,19 @@ class CollisionPolicy:
         model: mujoco.MjModel,
         robot_body_names: Optional[Sequence[str]] = None,
         obstacle_body_names: Optional[Sequence[str]] = None,
+        obstacle_kinds: Optional[Sequence[tuple[str, str]]] = None,
         obstacle_penetration_tolerance: Optional[float] = None,
         safety_config: SafetyConfig | None = None,
     ) -> None:
         safety = safety_config or get_active_runtime_config().safety
         self.model = model
         self.robot_body_names: Set[str] = set(robot_body_names or DEFAULT_ROBOT_BODIES)
+        self.obstacle_kinds = dict(obstacle_kinds or ())
         self.obstacle_body_names: Set[str] = set(obstacle_body_names or ())
+        self.obstacle_body_names.update(self.obstacle_kinds)
         self.ignored_body_names: Set[str] = set()
         self._attached_body_names: Set[str] = set()
+        self._attached_allowed_robot_contacts: dict[str, Set[str]] = {}
         self.obstacle_penetration_tolerance = (
             safety.obstacle_contact_tolerance_m
             if obstacle_penetration_tolerance is None
@@ -153,13 +157,20 @@ class CollisionPolicy:
         self.ignored_body_names = set(body_names or [])
         self.refresh()
 
-    def attach_body(self, body_name: str) -> None:
+    def attach_body(
+        self,
+        body_name: str,
+        allowed_robot_body_names: Optional[Iterable[str]] = None,
+    ) -> None:
         """Mark a body as attached to the robot (e.g. held cube).
 
         Attached bodies are treated as part of the robot for collision
         checking. Robot-attached contacts are exempt; attached-environment
         contacts are still checked.
         """
+        self._attached_allowed_robot_contacts[body_name] = set(
+            allowed_robot_body_names or ()
+        )
         if body_name not in self.robot_body_names:
             self.robot_body_names.add(body_name)
             self._attached_body_names.add(body_name)
@@ -169,6 +180,7 @@ class CollisionPolicy:
         """Remove a body from the attached set and restore it as environment."""
         if body_name in self._attached_body_names:
             self._attached_body_names.discard(body_name)
+            self._attached_allowed_robot_contacts.pop(body_name, None)
             self.robot_body_names.discard(body_name)
             self.refresh()
 
@@ -177,6 +189,11 @@ class CollisionPolicy:
         self.env_geom_ids = set()
         self.env_body_ids = set()
         self.obstacle_geom_ids = set()
+        self.robot_body_ids = {
+            self.model.body(name).id
+            for name in self.robot_body_names
+            if self._has_body(name)
+        }
 
         for geom_id in range(self.model.ngeom):
             body_id = int(self.model.geom_bodyid[geom_id])
@@ -206,10 +223,32 @@ class CollisionPolicy:
             geom2_robot = geom2 in self.robot_geom_ids
             geom1_env = geom1 in self.env_geom_ids
             geom2_env = geom2 in self.env_geom_ids
+            body1 = self._body_name_for_geom(geom1)
+            body2 = self._body_name_for_geom(geom2)
+
+            # An attached payload is part of the moving collision geometry, but
+            # only its declared gripper contacts are exempt. Payload-link
+            # contacts remain invalid instead of being hidden as robot self-contact.
+            if geom1_robot and geom2_robot:
+                attached_body = None
+                other_body = None
+                if body1 in self._attached_body_names:
+                    attached_body, other_body = body1, body2
+                elif body2 in self._attached_body_names:
+                    attached_body, other_body = body2, body1
+                if attached_body is not None and other_body not in (
+                    self._attached_allowed_robot_contacts.get(attached_body, set())
+                ):
+                    return CollisionReport(
+                        valid=False,
+                        geom1=geom1,
+                        geom2=geom2,
+                        body1=body1,
+                        body2=body2,
+                        penetration=max(0.0, -float(contact.dist)),
+                    )
 
             if (geom1_robot and geom2_env) or (geom2_robot and geom1_env):
-                body1 = self._body_name_for_geom(geom1)
-                body2 = self._body_name_for_geom(geom2)
                 env_body = body2 if geom1_robot else body1
                 robot_body = body1 if geom1_robot else body2
                 penetration = max(0.0, -float(contact.dist))
@@ -347,10 +386,4 @@ class CollisionPolicy:
         return body_name.lower() == "table"
 
     def _is_obstacle(self, body_name: str) -> bool:
-        if body_name in self.obstacle_body_names:
-            return True
-        lower = body_name.lower()
-        return any(
-            token in lower
-            for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
-        )
+        return body_name in self.obstacle_body_names

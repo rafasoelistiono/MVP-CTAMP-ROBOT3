@@ -136,10 +136,13 @@ class AlignTaskPlugin:
                 motion = replace(
                     motion,
                     ompl_required=True,
+                    planner="RRTConnect",
+                    time_limit_s=12.0,
+                    sampler_range=0.03,
                     state_validity_resolution=0.0004,
                     waypoint_step=0.006,
                     settle_steps_per_waypoint=20,
-                    valid_state_sampler="obstacle_based",
+                    valid_state_sampler="gaussian",
                     optimization_planner="BITstar",
                 )
                 ik = replace(
@@ -147,6 +150,11 @@ class AlignTaskPlugin:
                     backend="pinocchio",
                     require_pinocchio=True,
                     use_fallback=False,
+                    plan_position_error_m=0.003,
+                    pregrasp_position_error_m=0.003,
+                    plan_orientation_error_rad=0.0872664626,
+                    pregrasp_orientation_error_rad=0.0872664626,
+                    max_attempts_per_segment=320,
                 )
                 verification = replace(
                     verification,
@@ -171,6 +179,9 @@ class AlignTaskPlugin:
                     obstacle_body_names=tuple(
                         obstacle.id for obstacle in world.obstacles
                     ),
+                    obstacle_kinds=tuple(
+                        (obstacle.id, obstacle.kind) for obstacle in world.obstacles
+                    ),
                     home_q=home_q,
                     grasp_ready_q=home_q,
                     desired_tool_x=(
@@ -194,6 +205,9 @@ class AlignTaskPlugin:
                     base_z=world.robot_base_z,
                     obstacle_body_names=tuple(
                         obstacle.id for obstacle in world.obstacles
+                    ),
+                    obstacle_kinds=tuple(
+                        (obstacle.id, obstacle.kind) for obstacle in world.obstacles
                     ),
                     grasp_ready_q=config.model.home_q,
                 ),

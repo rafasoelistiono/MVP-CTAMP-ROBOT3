@@ -58,11 +58,13 @@ def test_context_layout_invariants(world):
     wall = world.obstacles[0]
     half_x, half_y, _ = (value / 2.0 for value in wall.size)
     group_y = min(group.center[1] for group in world.grouped_tidy.groups)
-    assert world.robot_base_xy[1] < wall.pose[1] < group_y
-    assert world.robot_base_xy[1] == pytest.approx(-0.34)
+    assert world.robot_base_xy[1] == pytest.approx(wall.pose[1])
+    assert world.robot_base_xy[1] < group_y
+    assert world.robot_base_xy[0] == pytest.approx(-0.42)
     assert world.robot_base_z == pytest.approx(0.88)
     assert world.robot_reach_max == pytest.approx(1.50)
-    assert abs(world.robot_base_xy[0] - wall.pose[0]) <= 0.20
+    # Aligned with the wall along the X axis: same Y, separated in X.
+    assert wall.pose[0] - world.robot_base_xy[0] >= half_x + 0.35
     assert wall.id == "frontal_tall_wall"
     assert wall.size == pytest.approx((0.08, 0.20, 1.60))
     assert wall.pose[2] + wall.size[2] / 2.0 >= 2.30
@@ -84,7 +86,7 @@ def test_table_is_wide_and_deep(world):
     assert world.table_y_range[1] - world.table_y_range[0] >= 2.00
 
 
-def test_objects_are_scattered_behind_and_around_wall(world):
+def test_objects_randomly_spread_behind_wall_across_requested_y_range(world):
     wall = world.obstacles[0]
     half_x, half_y, _ = (value / 2.0 for value in wall.size)
     colors = {}
@@ -93,15 +95,38 @@ def test_objects_are_scattered_behind_and_around_wall(world):
         colors[obj.rgba] += 1
     left = [obj for obj in world.objects if obj.pose[0] < wall.pose[0] + half_x + 0.13]
     right = [obj for obj in world.objects if obj.pose[0] > wall.pose[0] + half_x + 0.13]
+    x_values = [obj.pose[0] for obj in world.objects]
     y_values = [obj.pose[1] for obj in world.objects]
+    sorted_y = sorted(y_values)
+    y_gaps = [
+        round(sorted_y[index + 1] - sorted_y[index], 3)
+        for index in range(len(sorted_y) - 1)
+    ]
     assert len(world.objects) == 12
     assert sorted(colors.values()) == [6, 6]
     assert len(left) == 0
     assert len(right) == len(world.objects)
-    assert min(y_values) <= world.table_y_range[0] + 0.15
-    assert max(y_values) >= 0.18
-    assert max(y_values) - min(y_values) >= 1.10
-    assert len({round(y, 2) for y in y_values}) == len(world.objects)
+    assert y_values == pytest.approx([
+        -0.80,
+        -0.655,
+        -0.509,
+        -0.364,
+        -0.218,
+        -0.073,
+        0.073,
+        0.218,
+        0.364,
+        0.509,
+        0.655,
+        0.80,
+    ])
+    assert min(y_values) == pytest.approx(-0.80)
+    assert max(y_values) == pytest.approx(0.80)
+    assert all(0.14 <= gap <= 0.15 for gap in y_gaps)
+    assert len({round(value, 2) for value in x_values}) >= 10
+    assert min(x_values) <= 0.25
+    assert max(x_values) >= 0.70
+    assert all(value > wall.pose[0] + half_x + 0.13 for value in x_values)
     for obj in world.objects:
         assert obj.reachable
         assert obj.pose[0] > wall.pose[0] + half_x + 0.13
@@ -130,7 +155,7 @@ def test_tidy_slots_use_right_wall_corridor_and_are_safe(world, slots):
     }
     assert set(slots) == expected
     validate_slots(slots, world, obstacle_buffer_m=0.13)
-    assert {round(pose[0], 2) for pose in slots.values()} == {0.22, 0.36}
+    assert {round(pose[0], 2) for pose in slots.values()} == {0.26, 0.36}
     assert max(pose[1] for pose in slots.values()) - min(pose[1] for pose in slots.values()) == pytest.approx(0.34)
     for pose in slots.values():
         assert pose[0] > wall.pose[0] + half_x + 0.13

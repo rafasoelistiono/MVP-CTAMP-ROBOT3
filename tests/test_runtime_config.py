@@ -19,7 +19,9 @@ def test_code_profiles_select_scene_specific_tuning():
     normal = load_runtime_config("conservative", enable_viewer=False)
     obstacle = load_runtime_config("obstacle", enable_viewer=False)
     assert normal.motion.time_limit_s == 6.0
-    assert obstacle.motion.time_limit_s == 8.0
+    assert obstacle.motion.time_limit_s == 12.0
+    assert obstacle.motion.sampler_range == 0.04
+    assert obstacle.motion.valid_state_sampler == "obstacle_based"
     assert obstacle.ik.max_valid_candidates == 8
     assert obstacle.safety.min_pick_obstacle_clearance_m == 0.10
     assert obstacle.grasp.open_grip_m == 0.05

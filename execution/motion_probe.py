@@ -112,6 +112,9 @@ class MotionProbe:
                 pick_result.min_clearance, place_result.min_clearance
             ),
             collision_count=pick_result.collision_count + place_result.collision_count,
+            grasp_diagnostics=pick_result.grasp_diagnostics,
+            attempted_orientations=pick_result.attempted_orientations,
+            attempted_seeds=pick_result.attempted_seeds + place_result.attempted_seeds,
         )
 
     def probe_align_plan_feasibility(
@@ -225,10 +228,45 @@ class MotionProbe:
                 obj.pose[1],
                 obj.pose[2] + clearance,
             )
-            report = self._runtime.probe_motion_to(
-                pregrasp_pos,
-                label=f"pick({object_id}) pregrasp probe",
+            # Candidate plans change cube occupancy before later edges. Probing
+            # every edge against the untouched initial clutter creates false
+            # negatives for slots that will already be cleared. Keep static
+            # geometry (typed wall/table) active and ignore only task cubes.
+            probe_ignored_bodies = [item.id for item in world.objects]
+            probe_budget = float(
+                getattr(
+                    getattr(self._runtime.CONFIG, "motion", None),
+                    "probe_time_limit_s",
+                    2.0,
+                )
             )
+            remaining = max(0.001, probe_budget - (time.perf_counter() - start))
+            if all(
+                hasattr(self._runtime, name)
+                for name in ("grasp_pose_candidates", "probe_motion_to")
+            ):
+                report = self._probe_grasp_candidates_with_fast_ik_failover(
+                    object_id,
+                    obj.pose,
+                    ignored_body_names=probe_ignored_bodies,
+                    time_limit=remaining,
+                    lateral_enabled=obj.cls == "cube",
+                )
+            elif hasattr(self._runtime, "probe_grasp_candidates"):
+                report = self._runtime.probe_grasp_candidates(
+                    object_id,
+                    obj.pose,
+                    ignored_body_names=probe_ignored_bodies,
+                    time_limit=remaining,
+                    lateral_enabled=obj.cls == "cube",
+                )
+            else:
+                report = self._runtime.probe_motion_to(
+                    pregrasp_pos,
+                    label=f"pick({object_id}) pregrasp probe",
+                    ignored_body_names=probe_ignored_bodies,
+                    time_limit=remaining,
+                )
             planning_time = time.perf_counter() - start
             return ProbeResult(
                 feasible=bool(report.get("success", False)),
@@ -239,6 +277,10 @@ class MotionProbe:
                 min_clearance=float(report.get("min_clearance", 0.0)),
                 collision_count=0,
                 failure_reason=report.get("failure_reason"),
+                grasp_diagnostics=tuple(report.get("grasp_diagnostics", ())),
+                timeout_phase=report.get("timeout_phase"),
+                attempted_orientations=int(report.get("attempted_orientations", 0)),
+                attempted_seeds=int(report.get("attempted_seeds", 0)),
             )
         except Exception as exc:
             planning_time = time.perf_counter() - start
@@ -247,8 +289,146 @@ class MotionProbe:
                 ik_success=False,
                 ompl_success=False,
                 planning_time=round(planning_time, 4),
-                failure_reason=f"probe_exception:{exc.__class__.__name__}",
+                failure_reason=f"probe_exception:{exc.__class__.__name__}:{exc}",
             )
+
+    @staticmethod
+    def _is_fast_ik_failure(report: dict, elapsed: float) -> bool:
+        if elapsed > 0.3 or bool(report.get("ik_success", False)):
+            return False
+        reason = str(report.get("failure_reason") or "").strip().lower()
+        return (
+            reason == "ik_failed"
+            or reason.startswith("ik_")
+            or reason.startswith("no_ik_")
+        )
+
+    def _probe_grasp_candidates_with_fast_ik_failover(
+        self,
+        object_id: str,
+        object_pose: tuple[float, ...],
+        *,
+        ignored_body_names: list[str],
+        time_limit: float,
+        lateral_enabled: bool,
+    ) -> dict:
+        """Probe ordered execution poses, immediately skipping fast IK failures."""
+        started = time.perf_counter()
+        deadline = started + float(time_limit)
+        diagnostics: list[dict] = []
+        candidates = self._runtime.grasp_pose_candidates(
+            object_pose,
+            lateral_enabled=lateral_enabled,
+        )
+
+        for candidate in candidates:
+            name = str(candidate["name"])
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0.0:
+                return self._grasp_probe_failure(
+                    diagnostics,
+                    started,
+                    "motion_probe_timeout",
+                    timeout_phase=f"grasp_candidate:{name}",
+                )
+
+            candidate_started = time.perf_counter()
+            report = self._runtime.probe_motion_to(
+                candidate["pregrasp_xyz"],
+                label=f"pick({object_id}) pregrasp probe {name}",
+                ignored_body_names=ignored_body_names,
+                time_limit=max(0.001, remaining),
+                target_rotation=candidate["rotation"],
+                deadline=deadline,
+            )
+            elapsed = time.perf_counter() - candidate_started
+            diagnostic = {
+                "candidate": name,
+                "approach_vector": [
+                    round(float(value), 6) for value in candidate["approach"]
+                ],
+                "pregrasp_position": [
+                    round(float(value), 6) for value in candidate["pregrasp_xyz"]
+                ],
+                "ik_success": bool(report.get("ik_success", False)),
+                "position_error_m": report.get("position_error_m"),
+                "orientation_error_rad": report.get("orientation_error_rad"),
+                "joint_limit_valid": report.get("joint_limit_valid"),
+                "collision_valid": report.get("collision_valid"),
+                "collision_reason": report.get("collision_reason"),
+                "ompl_success": bool(report.get("ompl_success", False)),
+                "planning_time_s": round(elapsed, 6),
+                "attempted_seeds": int(report.get("attempted_seeds", 0)),
+                "failure_reason": report.get("failure_reason"),
+                "fast_ik_failover": self._is_fast_ik_failure(report, elapsed),
+            }
+            diagnostics.append(diagnostic)
+            if hasattr(self._runtime, "log_event"):
+                self._runtime.log_event(
+                    "GRASP_PROBE_CANDIDATE",
+                    "OK" if report.get("success") else "REJECT",
+                    object_id=object_id,
+                    phase=name,
+                    failure_reason=report.get("failure_reason"),
+                    grasp_diagnostic=diagnostic,
+                )
+
+            if report.get("success"):
+                result = dict(report)
+                result.update(
+                    selected_grasp_candidate=name,
+                    attempted_orientations=len(diagnostics),
+                    grasp_diagnostics=diagnostics,
+                    planning_time=time.perf_counter() - started,
+                )
+                return result
+
+            if diagnostic["fast_ik_failover"]:
+                continue
+
+            if (
+                report.get("failure_reason") == "motion_probe_timeout"
+                and time.perf_counter() >= deadline
+            ):
+                return self._grasp_probe_failure(
+                    diagnostics,
+                    started,
+                    "motion_probe_timeout",
+                    timeout_phase=report.get(
+                        "timeout_phase", f"grasp_candidate:{name}"
+                    ),
+                )
+
+        return self._grasp_probe_failure(
+            diagnostics,
+            started,
+            "no_grasp_found",
+        )
+
+    @staticmethod
+    def _grasp_probe_failure(
+        diagnostics: list[dict],
+        started: float,
+        failure_reason: str,
+        *,
+        timeout_phase: str | None = None,
+    ) -> dict:
+        return {
+            "success": False,
+            "ik_success": any(
+                bool(item.get("ik_success", False)) for item in diagnostics
+            ),
+            "ompl_success": False,
+            "failure_reason": failure_reason,
+            "timeout_phase": timeout_phase,
+            "attempted_orientations": len(diagnostics),
+            "attempted_seeds": sum(
+                int(item.get("attempted_seeds", 0)) for item in diagnostics
+            ),
+            "planning_time": time.perf_counter() - started,
+            "grasp_diagnostics": diagnostics,
+        }
+
     def _backend_place_probe(
         self,
         world: WorldState,
@@ -266,9 +446,22 @@ class MotionProbe:
                 slot_pos[1],
                 slot_pos[2] + clearance,
             )
+            probe_ignored_bodies = [item.id for item in world.objects]
             report = self._runtime.probe_motion_to(
                 preplace_pos,
                 label=f"place({object_id}) preplace probe",
+                ignored_body_names=probe_ignored_bodies,
+                time_limit=max(
+                    0.001,
+                    float(
+                        getattr(
+                            getattr(self._runtime.CONFIG, "motion", None),
+                            "probe_time_limit_s",
+                            2.0,
+                        )
+                    )
+                    - (time.perf_counter() - start),
+                ),
             )
             planning_time = time.perf_counter() - start
             return ProbeResult(
@@ -280,6 +473,8 @@ class MotionProbe:
                 min_clearance=float(report.get("min_clearance", 0.0)),
                 collision_count=0,
                 failure_reason=report.get("failure_reason"),
+                timeout_phase=report.get("timeout_phase"),
+                attempted_seeds=int(report.get("attempted_seeds", 0)),
             )
         except Exception as exc:
             planning_time = time.perf_counter() - start
@@ -288,7 +483,7 @@ class MotionProbe:
                 ik_success=False,
                 ompl_success=False,
                 planning_time=round(planning_time, 4),
-                failure_reason=f"probe_exception:{exc.__class__.__name__}",
+                failure_reason=f"probe_exception:{exc.__class__.__name__}:{exc}",
             )
 
 
@@ -300,6 +495,8 @@ def _point_near_obstacle(
     import math
 
     size = getattr(obstacle, "size", None)
+    if getattr(obstacle, "kind", "obstacle") == "wall" and size is None:
+        raise ValueError(f"wall obstacle {obstacle.id!r} requires explicit AABB size")
     if size is None:
         return math.dist(point_xy, obstacle.pose[:2]) < obstacle.radius + clearance
     dx = max(abs(float(point_xy[0]) - obstacle.pose[0]) - size[0] / 2.0, 0.0)

@@ -6,6 +6,9 @@ from task_planning.types import SlotConfig
 from .state import GroupedTidyConfig, TidyGroup, WorldState
 
 
+WALL_SLOT_CLEARANCE_M = 0.20
+
+
 class SlotAllocationError(ValueError):
     pass
 
@@ -202,6 +205,17 @@ def _inside_obstacle_clearance(
     obstacle,
     buffer: float,
 ) -> bool:
+    if getattr(obstacle, "kind", "obstacle") == "wall":
+        if obstacle.size is None:
+            raise SlotAllocationError(
+                f"wall obstacle {obstacle.id!r} requires explicit AABB size"
+            )
+        half_x, half_y, _ = (value / 2.0 for value in obstacle.size)
+        wall_buffer = max(buffer, WALL_SLOT_CLEARANCE_M)
+        return (
+            abs(xy[0] - obstacle.pose[0]) < half_x + wall_buffer
+            and abs(xy[1] - obstacle.pose[1]) < half_y + wall_buffer
+        )
     if obstacle.size:
         half_x, half_y, _ = (value / 2.0 for value in obstacle.size)
         return (

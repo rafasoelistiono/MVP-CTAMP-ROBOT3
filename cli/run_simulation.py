@@ -4,6 +4,7 @@ import argparse
 import csv
 import sys
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from task_planning.loader import load_plan
 from task_planning.validator import validate
 from plugins.registry import DEFAULT_REGISTRY
 from scene import prepare_scene_variant
-from telemetry import write_run_manifest, write_summary_csv
+from telemetry import finalize_run_manifest, write_run_manifest, write_summary_csv
 from telemetry.naming import (
     infer_experiment_label,
     normalize_experiment_label,
@@ -36,6 +37,43 @@ from world.slot_allocator import (
 )
 
 
+class FrameMismatchError(ValueError):
+    """The context, generated scene, and loaded simulator disagree on link0."""
+
+
+def _scene_link0_position(scene_file: Path) -> tuple[float, float, float]:
+    root = ET.parse(scene_file).getroot()
+    body = root.find("./worldbody/body[@name='link0']")
+    if body is None:
+        raise FrameMismatchError(f"generated scene has no worldbody/link0: {scene_file}")
+    values = tuple(float(value) for value in body.get("pos", "").split())
+    if len(values) != 3:
+        raise FrameMismatchError(f"generated scene link0 has invalid pos={values!r}")
+    return values
+
+
+def _assert_base_frame_consistency(world, scene_file: Path, runtime) -> None:
+    context_base = (
+        float(world.robot_base_xy[0]),
+        float(world.robot_base_xy[1]),
+        float(world.robot_base_z),
+    )
+    builder_base = _scene_link0_position(scene_file)
+    sim_base = tuple(float(value) for value in runtime.model.body("link0").pos[:3])
+    tolerance_m = 0.001
+    max_error = max(
+        max(abs(a - b) for a, b in zip(context_base, builder_base)),
+        max(abs(a - b) for a, b in zip(context_base, sim_base)),
+        max(abs(a - b) for a, b in zip(builder_base, sim_base)),
+    )
+    if max_error > tolerance_m:
+        raise FrameMismatchError(
+            "robot base frame mismatch (>1 mm): "
+            f"context={context_base}, builder={builder_base}, sim={sim_base}, "
+            f"max_error_m={max_error:.6f}"
+        )
+
+
 def _collision_count(event_path: Path) -> int:
     if not event_path.exists():
         return 0
@@ -46,6 +84,42 @@ def _collision_count(event_path: Path) -> int:
             if row.get("collision_pair")
             or "collision" in str(row.get("failure_reason", "")).lower()
         )
+
+
+def _failure_reason_count(event_path: Path, reason: str) -> int:
+    if not event_path.exists():
+        return 0
+    with event_path.open(newline="", encoding="utf-8") as stream:
+        return sum(
+            1
+            for row in csv.DictReader(stream)
+            if str(row.get("failure_reason", "")) == reason
+        )
+
+
+def _lane_assignment_valid(plan, world) -> bool:
+    if not world.grouped_tidy:
+        return True
+    object_colors = {
+        obj.id: (obj.color or "").lower() for obj in world.objects
+    }
+    slot_colors = {
+        slot_id: group.color.lower()
+        for group in world.grouped_tidy.groups
+        for slot_id in (
+            f"{world.grouped_tidy.slot_prefix}_{group.id}_{index}"
+            for index in range(len(group.objects))
+        )
+    }
+    assignments = {
+        predicate["args"][0]: predicate["args"][1]
+        for predicate in plan.goal_predicates
+        if predicate.get("name") == "at" and len(predicate.get("args", [])) == 2
+    }
+    return set(assignments) == set(world.target_objects) and all(
+        slot_colors.get(slot_id) == object_colors.get(object_id)
+        for object_id, slot_id in assignments.items()
+    )
 
 
 def _arguments() -> argparse.Namespace:
@@ -161,6 +235,9 @@ def main() -> int:
             base_xy=world.robot_base_xy,
             base_z=world.robot_base_z,
             obstacle_body_names=tuple(obstacle.id for obstacle in world.obstacles),
+            obstacle_kinds=tuple(
+                (obstacle.id, obstacle.kind) for obstacle in world.obstacles
+            ),
         ),
     ).validate()
     if args.use_adaptive_cache:
@@ -233,6 +310,8 @@ def main() -> int:
     # after every deterministic validation gate has passed.
     from backends.mujoco import runtime
 
+    _assert_base_frame_consistency(world, scene_file, runtime)
+
     started = time.perf_counter()
     result = None
     runner = None
@@ -288,6 +367,13 @@ def main() -> int:
             "robust_align_alignment_error": rat.alignment_error,
             "robust_align_spacing_error": rat.spacing_error,
         }
+    collision_count = _collision_count(backend_event_path)
+    executed_plan = runner.plan if runner is not None else plan
+    lane_assignment_valid = _lane_assignment_valid(executed_plan, world)
+    orientation_error_count = _failure_reason_count(
+        backend_event_path,
+        "ik_orientation_error_above_limit",
+    )
     summary_path = write_summary_csv(
         task_name=f"task_plan_{plan.task}",
         scene_key=world.variant,
@@ -313,7 +399,7 @@ def main() -> int:
             "num_groups": len(world.grouped_tidy.groups) if world.grouped_tidy else 0,
             "num_obstacles": len(world.obstacles),
             "planner_name": runtime_config.motion.planner,
-            "collision_count": _collision_count(backend_event_path),
+            "collision_count": collision_count,
             "plan_steps": len(runner.plan.steps) if runner else len(plan.steps),
             "executed_steps": len(result.step_results) if result else 0,
             "retry_count": (
@@ -331,6 +417,15 @@ def main() -> int:
             **robust_telemetry,
         },
         log_dir=args.log_dir,
+    )
+    finalize_run_manifest(
+        manifest_path,
+        success=success,
+        objects_moved=result.moved_count if result else 0,
+        objects_total=len(plan.target_objects),
+        collision_count=collision_count,
+        lane_assignment_valid=lane_assignment_valid,
+        ik_orientation_error_count=orientation_error_count,
     )
     print(
         f"success={success} moved={result.moved_count if result else 0}/"

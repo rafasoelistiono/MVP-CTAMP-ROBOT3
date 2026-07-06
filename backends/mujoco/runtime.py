@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import time
+import hashlib
+import json
+from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
 import mujoco
@@ -106,6 +109,12 @@ CAUTIOUS_OBSTACLE_CLEARANCE = CONFIG.safety.cautious_obstacle_clearance_m
 # configuration (joint2 > ~0.55) that would place link2 below z=0.80.
 _ELBOW_UP_REF = np.asarray(CONFIG.model.elbow_up_q, dtype=float)
 _WALL_RIGHT_REF = np.asarray(CONFIG.model.wall_right_q, dtype=float)
+_GATEWAY_HOME_REFERENCE = np.asarray(
+    (0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785),
+    dtype=float,
+)
+_MAX_GATEWAY_HOME_L1 = 3.5
+_OBSTACLE_KINDS = dict(CONFIG.model.obstacle_kinds)
 
 # When fragile objects are present, never use IK fallback for physical motion.
 USE_IK_FALLBACK = CONFIG.ik.use_fallback
@@ -146,6 +155,55 @@ _LAST_SUCCESSFUL_SEED: Optional[np.ndarray] = None
 
 _hint_cache = None          # set by init_hint_cache()
 _hint_context: dict = {}    # set by pick()/place() before each IK call sequence
+
+
+class MotionProbeTimeout(RuntimeError):
+    def __init__(self, phase: str, attempted_seeds: int = 0):
+        super().__init__(f"motion_probe_timeout:{phase}")
+        self.phase = phase
+        self.attempted_seeds = attempted_seeds
+
+
+def _check_deadline(deadline: Optional[float], phase: str, attempted_seeds: int = 0) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise MotionProbeTimeout(phase, attempted_seeds)
+
+
+def _remaining_probe_segment_time(deadline: float) -> float:
+    return max(
+        0.001,
+        min(
+            deadline - time.monotonic(),
+            float(CONFIG.motion.probe_segment_time_limit_s),
+        ),
+    )
+
+
+def _runtime_config_fingerprint() -> str:
+    model_path = Path(CONFIG.model.xml_path).resolve()
+    try:
+        model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    except OSError:
+        model_sha256 = "unreadable"
+    payload = {
+        "model_path": str(model_path),
+        "model_sha256": model_sha256,
+        "runtime_profile": CONFIG.name,
+        "active_arm": ACTIVE_ARM,
+        "base_xy": [float(v) for v in CONFIG.model.base_xy],
+        "base_z": float(CONFIG.model.base_z),
+        "joint_limits": np.asarray(arm_ranges, dtype=float).round(8).tolist(),
+        "ik_backend": CONFIG.ik.backend,
+        "require_pinocchio": bool(CONFIG.ik.require_pinocchio),
+        "plan_position_error_m": float(CONFIG.ik.plan_position_error_m),
+        "pregrasp_position_error_m": float(CONFIG.ik.pregrasp_position_error_m),
+        "plan_orientation_error_rad": float(CONFIG.ik.plan_orientation_error_rad),
+        "pregrasp_orientation_error_rad": float(CONFIG.ik.pregrasp_orientation_error_rad),
+        "desired_tool_z": [float(v) for v in CONFIG.model.desired_tool_z],
+        "desired_tool_x": CONFIG.model.desired_tool_x,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 _BASE_ROBOT_BODY_NAMES = (
     "link0",
@@ -237,6 +295,7 @@ def set_active_arm(arm: str) -> None:
         model,
         robot_body_names=active_robot_body_names,
         obstacle_body_names=CONFIG.model.obstacle_body_names,
+        obstacle_kinds=CONFIG.model.obstacle_kinds,
     )
     log_event("ARM_SELECT", "OK", arm=ACTIVE_ARM, base_xy=[round(float(v), 4) for v in BASE_XY])
 
@@ -255,6 +314,7 @@ def _initialize_available_arms() -> None:
 # =============================
 
 name_to_cube = {}
+_configured_obstacle_names = set(CONFIG.model.obstacle_body_names)
 for i in range(model.nbody):
     name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i)
     joint_count = int(model.body_jntnum[i])
@@ -263,13 +323,7 @@ for i in range(model.nbody):
         first_joint >= 0
         and int(model.jnt_type[first_joint]) == int(mujoco.mjtJoint.mjJNT_FREE)
     )
-    is_obstacle = bool(
-        name
-        and any(
-            token in name.lower()
-            for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
-        )
-    )
+    is_obstacle = bool(name and name in _configured_obstacle_names)
     if name and is_free_body and not is_obstacle:
         name_to_cube[name] = model.body(name).id
 
@@ -281,18 +335,11 @@ _obstacle_ids = resolve_obstacle_body_ids(
     model,
     CONFIG.model.obstacle_body_names,
 )
-if not CONFIG.model.obstacle_body_names:
-    # Compatibility for direct backend imports that do not pass through the
-    # context-aware CLI. Production runs always provide semantic body names.
-    _obstacle_ids = {
-        name: model.body(name).id
-        for body_id in range(model.nbody)
-        if (name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id))
-        and any(
-            token in name.lower()
-            for token in ("obstacle", "_obs", "vase", "glass", "ceramic")
-        )
-    }
+_wall_ids = {
+    name: body_id
+    for name, body_id in _obstacle_ids.items()
+    if _OBSTACLE_KINDS.get(name) == "wall"
+}
 
 _obstacle_init_z: dict[str, float] = {}
 _obstacle_init_xy: dict[str, np.ndarray] = {}
@@ -363,7 +410,7 @@ def _grouped_wall_bounds() -> tuple[float, float, float, float] | None:
     return tall_box_obstacle_bounds_xy(
         model,
         data,
-        _obstacle_ids.values(),
+        _wall_ids.values(),
     )
 
 
@@ -403,6 +450,34 @@ def _grouped_wall_bypass_waypoints(
     if current_behind:
         return side, (behind_gateway, front_gateway, target_hover)
     return side, (front_gateway, behind_gateway, target_hover)
+
+
+def _validated_wall_right_q(
+    planner,
+    ignored_body_names: Optional[Sequence[str]] = None,
+) -> tuple[bool, str, np.ndarray]:
+    q = clip_arm(_WALL_RIGHT_REF.copy())
+    if not joint_limits_valid(q, arm_ranges[:, 0], arm_ranges[:, 1]):
+        return False, "joint_limits", q
+    home_l1 = float(np.sum(np.abs(q - _GATEWAY_HOME_REFERENCE)))
+    if home_l1 > _MAX_GATEWAY_HOME_L1:
+        return False, f"home_l1_distance:{home_l1:.6f}>{_MAX_GATEWAY_HOME_L1:.6f}", q
+    if not planner.is_state_valid_q(q, ignored_body_names=ignored_body_names):
+        return False, getattr(planner, "_last_invalid_reason", None) or "collision", q
+    ee_xyz = np.asarray(_mujoco_fk_xyz(q), dtype=float)
+    bounds = _grouped_wall_bounds()
+    if bounds is None:
+        return True, "no_wall", q
+    min_x, max_x, min_y, max_y = bounds
+    dx = max(min_x - ee_xyz[0], 0.0, ee_xyz[0] - max_x)
+    dy = max(min_y - ee_xyz[1], 0.0, ee_xyz[1] - max_y)
+    clearance = float(np.hypot(dx, dy))
+    if clearance < 0.08:
+        return False, f"ee_corridor_clearance:{clearance:.4f}", q
+    return True, (
+        f"ee_corridor_clearance:{clearance:.4f};"
+        f"home_l1_distance:{home_l1:.6f}"
+    ), q
 
 
 def _object_lifted(obj: str) -> tuple[bool, float]:
@@ -521,6 +596,7 @@ def _get_ompl_planner():
             optimization_planner=CONFIG.motion.optimization_planner,
             minimum_obstacle_clearance=CONFIG.safety.planning_obstacle_clearance_m,
             obstacle_body_names=CONFIG.model.obstacle_body_names,
+            obstacle_kinds=CONFIG.model.obstacle_kinds,
             robot_body_names=active_robot_body_names,
             arm_joint_names=arm_joint_names,
         )
@@ -604,14 +680,43 @@ def _object_pose_failure_reason(pos: Sequence[float]) -> Optional[str]:
     return None
 
 
-def _desired_orientation_error_from_matrix(rot_matrix: np.ndarray) -> float:
-    z_axis = np.asarray(rot_matrix, dtype=float).reshape(3, 3)[:, 2]
-    denom = max(float(np.linalg.norm(z_axis) * np.linalg.norm(_DESIRED_Z)), 1e-9)
-    cos_angle = float(np.clip(np.dot(z_axis, _DESIRED_Z) / denom, -1.0, 1.0))
-    return float(np.arccos(cos_angle))
+def _rotation_error_vector(
+    current_rotation: np.ndarray,
+    desired_rotation: np.ndarray,
+) -> np.ndarray:
+    current_quaternion = np.zeros(4, dtype=float)
+    desired_quaternion = np.zeros(4, dtype=float)
+    current_inverse = np.zeros(4, dtype=float)
+    error_quaternion = np.zeros(4, dtype=float)
+    error_vector = np.zeros(3, dtype=float)
+    mujoco.mju_mat2Quat(current_quaternion, np.asarray(current_rotation).reshape(-1))
+    mujoco.mju_mat2Quat(desired_quaternion, np.asarray(desired_rotation).reshape(-1))
+    mujoco.mju_negQuat(current_inverse, current_quaternion)
+    mujoco.mju_mulQuat(error_quaternion, desired_quaternion, current_inverse)
+    if error_quaternion[0] < 0.0:
+        error_quaternion *= -1.0
+    mujoco.mju_quat2Vel(error_vector, error_quaternion, 1.0)
+    return error_vector
 
 
-def _mujoco_fk_error(q: Sequence[float], target_xyz: Sequence[float]) -> tuple[float, float, list[float]]:
+def _desired_orientation_error_from_matrix(
+    rot_matrix: np.ndarray,
+    target_rotation: Optional[np.ndarray] = None,
+) -> float:
+    current = np.asarray(rot_matrix, dtype=float).reshape(3, 3)
+    desired = (
+        _tool_target_rotation(current)
+        if target_rotation is None
+        else np.asarray(target_rotation, dtype=float).reshape(3, 3)
+    )
+    return float(np.linalg.norm(_rotation_error_vector(current, desired)))
+
+
+def _mujoco_fk_error(
+    q: Sequence[float],
+    target_xyz: Sequence[float],
+    target_rotation: Optional[np.ndarray] = None,
+) -> tuple[float, float, list[float]]:
     q_arr = clip_arm(np.asarray(q, dtype=float).reshape(-1))
     _plan_data.qpos[:] = data.qpos[:]
     _plan_data.qvel[:] = 0.0
@@ -619,7 +724,10 @@ def _mujoco_fk_error(q: Sequence[float], target_xyz: Sequence[float]) -> tuple[f
     mujoco.mj_forward(model, _plan_data)
     ee_pos = _plan_data.xpos[ee_id].copy()
     pos_err = float(np.linalg.norm(np.asarray(target_xyz, dtype=float).reshape(3) - ee_pos))
-    ori_err = _desired_orientation_error_from_matrix(_plan_data.xmat[ee_id].reshape(3, 3))
+    ori_err = _desired_orientation_error_from_matrix(
+        _plan_data.xmat[ee_id].reshape(3, 3),
+        target_rotation,
+    )
     return pos_err, ori_err, _round_vec(ee_pos, 4)
 
 
@@ -771,6 +879,8 @@ def _ik_solve_to(
     steps: int = 600,
     pos_tol: float = 0.008,
     ori_tol: float = 0.20,
+    target_rotation: Optional[np.ndarray] = None,
+    deadline: Optional[float] = None,
 ) -> Tuple[np.ndarray, dict]:
     if null_ref is None:
         null_ref = GRASP_READY
@@ -785,7 +895,18 @@ def _ik_solve_to(
         "iters": 0,
     }
 
+    _plan_data.qpos[:] = data.qpos[:]
+    _plan_data.qvel[:] = 0.0
+    _plan_data.qpos[arm_qpos_adr] = q_target
+    mujoco.mj_forward(model, _plan_data)
+    desired_rotation = (
+        _tool_target_rotation(_plan_data.xmat[ee_id].reshape(3, 3))
+        if target_rotation is None
+        else np.asarray(target_rotation, dtype=float).reshape(3, 3)
+    )
+
     for it in range(steps):
+        _check_deadline(deadline, "mujoco_dls_iteration")
         _plan_data.qpos[:] = data.qpos[:]
         _plan_data.qvel[:] = 0.0
         _plan_data.qpos[arm_qpos_adr] = q_target
@@ -793,10 +914,10 @@ def _ik_solve_to(
 
         pos_error = target_xyz - _plan_data.xpos[ee_id]
         R = _plan_data.xmat[ee_id].reshape(3, 3)
-        ori_error = np.cross(R[:, 2], _DESIRED_Z)
+        ori_error = _rotation_error_vector(R, desired_rotation)
 
         pos_norm = float(np.linalg.norm(pos_error))
-        ori_norm = _desired_orientation_error_from_matrix(R)
+        ori_norm = float(np.linalg.norm(ori_error))
 
         info["pos_err_norm"] = pos_norm
         info["ori_err_norm"] = ori_norm
@@ -837,6 +958,8 @@ def _pinocchio_ik_solve_to(
     steps: int = 120,
     pos_tol: float = 0.006,
     ori_tol: float = 0.25,
+    target_rotation: Optional[np.ndarray] = None,
+    deadline: Optional[float] = None,
 ) -> Tuple[np.ndarray, dict]:
     if _PINOCCHIO_MODEL is None or _PINOCCHIO_DATA is None or _PINOCCHIO_FRAME_ID is None:
         raise RuntimeError("Pinocchio IK backend is not initialized")
@@ -865,9 +988,16 @@ def _pinocchio_ik_solve_to(
     initial_rotation = np.asarray(
         _PINOCCHIO_DATA.oMf[_PINOCCHIO_FRAME_ID].rotation
     ).reshape(3, 3)
-    desired_rotation = _tool_target_rotation(initial_rotation)
+    desired_rotation = (
+        _tool_target_rotation(initial_rotation)
+        if target_rotation is None
+        else np.asarray(target_rotation, dtype=float).reshape(3, 3)
+    )
     orientation_weight = 0.45
+    error_history: list[tuple[float, float]] = []
+    two_cycle_hits = 0
     for it in range(steps):
+        _check_deadline(deadline, "pinocchio_iteration")
         pin.forwardKinematics(_PINOCCHIO_MODEL, _PINOCCHIO_DATA, q)
         pin.updateFramePlacements(_PINOCCHIO_MODEL, _PINOCCHIO_DATA)
         frame = _PINOCCHIO_DATA.oMf[_PINOCCHIO_FRAME_ID]
@@ -878,6 +1008,16 @@ def _pinocchio_ik_solve_to(
             pin.log3(desired_rotation @ frame_rotation.T)
         ).reshape(3)
         ori_norm = float(np.linalg.norm(orientation_error))
+        log_event(
+            "IK_ITERATION",
+            "OK" if pos_norm <= pos_tol and ori_norm <= ori_tol else "RUNNING",
+            backend="pinocchio",
+            iteration=it + 1,
+            pos_err=round(pos_norm, 6),
+            ori_err=round(ori_norm, 6),
+            pos_limit=pos_tol,
+            ori_limit=ori_tol,
+        )
         info.update({
             "converged": pos_norm <= pos_tol and ori_norm <= ori_tol,
             "pos_err_norm": pos_norm,
@@ -885,6 +1025,30 @@ def _pinocchio_ik_solve_to(
             "iters": it + 1,
         })
         if info["converged"]:
+            break
+
+        error_state = (pos_norm, ori_norm)
+        if len(error_history) >= 2 and np.allclose(
+            error_state,
+            error_history[-2],
+            rtol=0.0,
+            atol=1e-5,
+        ):
+            two_cycle_hits += 1
+        else:
+            two_cycle_hits = 0
+        error_history.append(error_state)
+        if two_cycle_hits >= 6:
+            info["termination_reason"] = "two_cycle_stagnation"
+            log_event(
+                "IK_ITERATION",
+                "STAGNATION_EXIT",
+                backend="pinocchio",
+                iteration=it + 1,
+                pos_err=round(pos_norm, 6),
+                ori_err=round(ori_norm, 6),
+                cycle_repetitions=4,
+            )
             break
 
         jac = pin.computeFrameJacobian(
@@ -908,26 +1072,289 @@ def _pinocchio_ik_solve_to(
     return clip_arm(q[:7]), info
 
 
-def _tool_target_rotation(reference_rotation: np.ndarray) -> np.ndarray:
+def _tool_target_rotation(
+    reference_rotation: np.ndarray,
+    desired_z: Optional[Sequence[float]] = None,
+    desired_x: Optional[Sequence[float]] = None,
+) -> np.ndarray:
     """Align tool Z and optionally lock yaw through a configured tool X axis."""
-    desired_z = np.asarray(_DESIRED_Z, dtype=float).reshape(3)
-    desired_z /= max(float(np.linalg.norm(desired_z)), 1e-9)
+    desired_z_vec = np.asarray(
+        _DESIRED_Z if desired_z is None else desired_z,
+        dtype=float,
+    ).reshape(3)
+    desired_z_vec /= max(float(np.linalg.norm(desired_z_vec)), 1e-9)
     reference_x = (
         np.asarray(reference_rotation, dtype=float).reshape(3, 3)[:, 0]
-        if _DESIRED_X is None
-        else np.asarray(_DESIRED_X, dtype=float).reshape(3)
+        if desired_x is None and _DESIRED_X is None
+        else np.asarray(_DESIRED_X if desired_x is None else desired_x, dtype=float).reshape(3)
     )
-    desired_x = reference_x - desired_z * float(np.dot(reference_x, desired_z))
-    if float(np.linalg.norm(desired_x)) < 1e-6:
+    desired_x_vec = reference_x - desired_z_vec * float(np.dot(reference_x, desired_z_vec))
+    if float(np.linalg.norm(desired_x_vec)) < 1e-6:
         fallback = np.array([1.0, 0.0, 0.0])
-        if abs(float(np.dot(fallback, desired_z))) > 0.9:
+        if abs(float(np.dot(fallback, desired_z_vec))) > 0.9:
             fallback = np.array([0.0, 1.0, 0.0])
-        desired_x = fallback - desired_z * float(np.dot(fallback, desired_z))
-    desired_x /= float(np.linalg.norm(desired_x))
-    desired_y = np.cross(desired_z, desired_x)
+        desired_x_vec = fallback - desired_z_vec * float(np.dot(fallback, desired_z_vec))
+    desired_x_vec /= float(np.linalg.norm(desired_x_vec))
+    desired_y = np.cross(desired_z_vec, desired_x_vec)
     desired_y /= float(np.linalg.norm(desired_y))
-    desired_x = np.cross(desired_y, desired_z)
-    return np.column_stack((desired_x, desired_y, desired_z))
+    desired_x_vec = np.cross(desired_y, desired_z_vec)
+    return np.column_stack((desired_x_vec, desired_y, desired_z_vec))
+
+
+def _grasp_pose_candidates(
+    cube_pos: np.ndarray,
+    grasp_offset: float,
+    pregrasp_clearance: float,
+    lift_clearance: float,
+    *,
+    lateral_enabled: bool = True,
+) -> list[dict]:
+    reference_rotation = data.xmat[ee_id].reshape(3, 3).copy()
+    specifications = [
+        ("top_down", np.array([0.0, 0.0, -1.0]), np.array([1.0, 0.0, 0.0])),
+    ]
+    if lateral_enabled:
+        specifications.extend(
+            [
+                ("side_pos_x", np.array([-1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])),
+                ("side_neg_x", np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])),
+                ("side_pos_y", np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 1.0])),
+            ]
+        )
+
+    bounds = _grouped_wall_bounds()
+    near_wall_boundary = False
+    if bounds is not None:
+        min_x, max_x, _, _ = bounds
+        near_wall_boundary = min(
+            abs(float(cube_pos[0]) - min_x),
+            abs(float(cube_pos[0]) - max_x),
+        ) <= 0.06
+    if near_wall_boundary and lateral_enabled:
+        specifications = specifications[1:] + specifications[:1]
+
+    candidates: list[dict] = []
+    for name, approach, tool_x in specifications:
+        rotation = _tool_target_rotation(
+            reference_rotation,
+            desired_z=approach,
+            desired_x=tool_x,
+        )
+        candidates.append(
+            {
+                "name": name,
+                "approach": approach,
+                "rotation": rotation,
+                "pregrasp_xyz": cube_pos - approach * pregrasp_clearance,
+                "grasp_xyz": cube_pos - approach * grasp_offset,
+                # Every successful grasp clears the table vertically before
+                # transit, including lateral approaches.
+                "lift_xyz": cube_pos + np.array([0.0, 0.0, lift_clearance]),
+            }
+        )
+    return candidates
+
+
+def _select_grasp_pose_candidate(
+    obj: str,
+    candidates: Sequence[dict],
+    cube_ref: np.ndarray,
+) -> Optional[dict]:
+    for candidate_index, candidate in enumerate(candidates):
+        name = str(candidate["name"])
+        rotation = np.asarray(candidate["rotation"], dtype=float)
+        pregrasp_attempts = _ranked_ik_goals(
+            candidate["pregrasp_xyz"],
+            cube_ref,
+            f"pick({obj}) pregrasp candidate {name}",
+            target_rotation=rotation,
+            max_valid_candidates=1,
+        )
+        pregrasp_valid = next(
+            (attempt for attempt in pregrasp_attempts if attempt.failure_reason == IK_SUCCESS),
+            None,
+        )
+        if pregrasp_valid is None:
+            continue
+        grasp_attempts = _ranked_ik_goals(
+            candidate["grasp_xyz"],
+            cube_ref,
+            f"pick({obj}) grasp candidate {name}",
+            ignored_body_names=[obj],
+            target_rotation=rotation,
+            max_valid_candidates=1,
+            start_q=pregrasp_valid.q,
+        )
+        if any(attempt.failure_reason == IK_SUCCESS for attempt in grasp_attempts):
+            _log_arm_state(
+                "GRASP_CANDIDATE",
+                "SELECT",
+                object_id=obj,
+                grasp_candidate=name,
+                approach_vector=_round_vec(candidate["approach"], 3),
+            )
+            return candidate
+    _log_arm_state(
+        "GRASP_CANDIDATE",
+        "FAILED",
+        object_id=obj,
+        failure_reason="no_ik_feasible_collision_free_grasp_candidate",
+    )
+    return None
+
+
+def grasp_pose_candidates(
+    cube_pos: Sequence[float],
+    *,
+    lateral_enabled: bool = True,
+    pregrasp_clearance: Optional[float] = None,
+) -> list[dict]:
+    """Public shared grasp geometry used by execution and dry-run probing."""
+    mujoco.mj_forward(model, data)
+    return _grasp_pose_candidates(
+        np.asarray(cube_pos, dtype=float),
+        GRASP_OFFSET,
+        float(APPROACH_CLEARANCE if pregrasp_clearance is None else pregrasp_clearance),
+        APPROACH_CLEARANCE,
+        lateral_enabled=lateral_enabled,
+    )
+
+
+def _rotation_quaternion_wxyz(rotation: np.ndarray) -> list[float]:
+    quaternion = np.zeros(4, dtype=float)
+    mujoco.mju_mat2Quat(quaternion, np.asarray(rotation, dtype=float).reshape(-1))
+    return _round_vec(quaternion, 6)
+
+
+def probe_grasp_candidates(
+    object_id: str,
+    cube_pos: Sequence[float],
+    *,
+    ignored_body_names: Optional[Sequence[str]] = None,
+    time_limit: float = 2.0,
+    lateral_enabled: bool = True,
+) -> dict:
+    """Probe the exact ordered grasp orientations used by pick()."""
+    started = time.monotonic()
+    deadline = started + float(time_limit)
+    diagnostics: list[dict] = []
+    candidates = grasp_pose_candidates(
+        cube_pos,
+        lateral_enabled=lateral_enabled,
+    )
+    for candidate_index, candidate in enumerate(candidates):
+        name = str(candidate["name"])
+        if time.monotonic() >= deadline:
+            log_event(
+                "GRASP_PROBE",
+                "TIMEOUT",
+                object_id=object_id,
+                phase=f"grasp_candidate:{name}",
+                failure_reason="motion_probe_timeout",
+                grasp_diagnostics=diagnostics,
+            )
+            return {
+                "success": False,
+                "ik_success": False,
+                "ompl_success": False,
+                "failure_reason": "motion_probe_timeout",
+                "timeout_phase": f"grasp_candidate:{name}",
+                "attempted_orientations": len(diagnostics),
+                "attempted_seeds": sum(int(item.get("attempted_seeds", 0)) for item in diagnostics),
+                "planning_time": time.monotonic() - started,
+                "grasp_diagnostics": diagnostics,
+            }
+        candidate_started = time.monotonic()
+        candidate_deadline = deadline
+        report = probe_motion_to(
+            candidate["pregrasp_xyz"],
+            label=f"pick({object_id}) pregrasp probe {name}",
+            ignored_body_names=ignored_body_names,
+            time_limit=max(0.001, candidate_deadline - time.monotonic()),
+            target_rotation=np.asarray(candidate["rotation"], dtype=float),
+            deadline=candidate_deadline,
+        )
+        diagnostic = {
+            "candidate": name,
+            "approach_vector": _round_vec(candidate["approach"], 6),
+            "pregrasp_position": _round_vec(candidate["pregrasp_xyz"], 6),
+            "target_quaternion_wxyz": _rotation_quaternion_wxyz(candidate["rotation"]),
+            "ik_success": bool(report.get("ik_success", False)),
+            "position_error_m": report.get("position_error_m"),
+            "orientation_error_rad": report.get("orientation_error_rad"),
+            "joint_limit_valid": report.get("joint_limit_valid"),
+            "collision_valid": report.get("collision_valid"),
+            "collision_reason": report.get("collision_reason"),
+            "ompl_success": bool(report.get("ompl_success", False)),
+            "planning_time_s": round(time.monotonic() - candidate_started, 6),
+            "attempted_seeds": int(report.get("attempted_seeds", 0)),
+            "failure_reason": report.get("failure_reason"),
+        }
+        diagnostics.append(diagnostic)
+        log_event(
+            "GRASP_PROBE_CANDIDATE",
+            "OK" if report.get("success") else "REJECT",
+            object_id=object_id,
+            phase=name,
+            failure_reason=report.get("failure_reason"),
+            grasp_diagnostic=diagnostic,
+        )
+        if report.get("success"):
+            result = dict(report)
+            result.update(
+                selected_grasp_candidate=name,
+                attempted_orientations=len(diagnostics),
+                grasp_diagnostics=diagnostics,
+                planning_time=time.monotonic() - started,
+            )
+            log_event(
+                "GRASP_PROBE",
+                "OK",
+                object_id=object_id,
+                phase=name,
+                grasp_diagnostics=diagnostics,
+            )
+            return result
+        if report.get("failure_reason") == "motion_probe_timeout":
+            if time.monotonic() >= deadline:
+                log_event(
+                    "GRASP_PROBE",
+                    "TIMEOUT",
+                    object_id=object_id,
+                    phase=report.get("timeout_phase", f"grasp_candidate:{name}"),
+                    failure_reason="motion_probe_timeout",
+                    grasp_diagnostics=diagnostics,
+                )
+                return {
+                    "success": False,
+                    "ik_success": False,
+                    "ompl_success": False,
+                    "failure_reason": "motion_probe_timeout",
+                    "timeout_phase": report.get("timeout_phase", f"grasp_candidate:{name}"),
+                    "attempted_orientations": len(diagnostics),
+                    "attempted_seeds": sum(int(item.get("attempted_seeds", 0)) for item in diagnostics),
+                    "planning_time": time.monotonic() - started,
+                    "grasp_diagnostics": diagnostics,
+                }
+            continue
+
+    log_event(
+        "GRASP_PROBE",
+        "FAILED",
+        object_id=object_id,
+        failure_reason="no_grasp_found",
+        grasp_diagnostics=diagnostics,
+    )
+    return {
+        "success": False,
+        "ik_success": any(item["ik_success"] for item in diagnostics),
+        "ompl_success": False,
+        "failure_reason": "no_grasp_found",
+        "attempted_orientations": len(diagnostics),
+        "attempted_seeds": sum(int(item.get("attempted_seeds", 0)) for item in diagnostics),
+        "planning_time": time.monotonic() - started,
+        "grasp_diagnostics": diagnostics,
+    }
 
 
 def _pinocchio_base_translation() -> np.ndarray:
@@ -940,6 +1367,16 @@ def init_hint_cache(log_dir: str = "logs", scene_filter: Optional[str] = None) -
     global _hint_cache
     try:
         from .adaptive_hints import HintCache
+        fingerprint = _runtime_config_fingerprint()
+        log_event(
+            "RUNTIME_FINGERPRINT",
+            "OK",
+            backend=_IK_BACKEND_NAME,
+            config_fingerprint=fingerprint,
+            adaptive_history_consulted=not (
+                CONFIG.ik.require_pinocchio or CONFIG.ik.backend == "pinocchio"
+            ),
+        )
         _hint_cache = HintCache(
             log_dir=log_dir,
             scene_filter=scene_filter,
@@ -949,8 +1386,20 @@ def init_hint_cache(log_dir: str = "logs", scene_filter: Optional[str] = None) -
             near_miss_factor=CONFIG.adaptive.near_miss_factor,
             tolerance_headroom=CONFIG.adaptive.tolerance_headroom,
             max_tolerance_factor=CONFIG.adaptive.max_tolerance_factor,
+            config_fingerprint=fingerprint,
         )
-        log_event("HINT_CACHE", "LOADED", **_hint_cache.summary())
+        summary = _hint_cache.summary()
+        log_event(
+            "HINT_CACHE",
+            "LOADED",
+            backend=_IK_BACKEND_NAME,
+            history_policy=(
+                "backend_pinned_pinocchio"
+                if CONFIG.ik.require_pinocchio or CONFIG.ik.backend == "pinocchio"
+                else "matching_fingerprint_only"
+            ),
+            **summary,
+        )
     except Exception as exc:
         log_event("HINT_CACHE", "FAILED", failure_reason=str(exc))
 
@@ -962,24 +1411,83 @@ def _solve_ik_to(
     steps=800,
     pos_limit: Optional[float] = None,
     ori_limit: Optional[float] = None,
+    target_rotation: Optional[np.ndarray] = None,
+    deadline: Optional[float] = None,
 ):
+    max_pos = float(pos_limit if pos_limit is not None else IK_PLAN_POS_ERR_LIMIT)
+    max_ori = float(ori_limit if ori_limit is not None else IK_PLAN_ORI_ERR_LIMIT)
+    pinocchio_pinned = bool(
+        CONFIG.ik.require_pinocchio or CONFIG.ik.backend == "pinocchio"
+    )
     if _IK_BACKEND_NAME == "pinocchio":
-        if _hint_cache is not None and _hint_cache.preferred_backend(
+        if not pinocchio_pinned and _hint_cache is not None and _hint_cache.preferred_backend(
             reach_dist=_hint_context.get("reach_dist", 0.0),
             obstacle_dist=_hint_context.get("obstacle_dist", float("inf")),
         ) == "mujoco_dls":
-            return _ik_solve_to(target_xyz, null_ref=null_ref, q_seed=q_seed, steps=steps)
+            log_event(
+                "IK_BACKEND_POLICY",
+                "ADAPTIVE_OVERRIDE",
+                backend="mujoco_dls",
+                config_fingerprint=_runtime_config_fingerprint(),
+                reason="matching_history_requested_fallback",
+            )
+            return _ik_solve_to(
+                target_xyz,
+                null_ref=null_ref,
+                q_seed=q_seed,
+                steps=steps,
+                pos_tol=max_pos,
+                ori_tol=max_ori,
+                target_rotation=target_rotation,
+                deadline=deadline,
+            )
         try:
+            _check_deadline(deadline, "pinocchio_seed_start")
             seed = q_seed if q_seed is not None else null_ref
-            pin_q, pin_info = _pinocchio_ik_solve_to(target_xyz, q_seed=seed, steps=180)
-            fk_pos_err, fk_ori_err, _ = _mujoco_fk_error(pin_q, target_xyz)
-            max_pos = float(pos_limit if pos_limit is not None else IK_PLAN_POS_ERR_LIMIT)
-            max_ori = float(ori_limit if ori_limit is not None else IK_PLAN_ORI_ERR_LIMIT)
+            pin_q, pin_info = _pinocchio_ik_solve_to(
+                target_xyz,
+                q_seed=seed,
+                steps=180,
+                pos_tol=max_pos,
+                ori_tol=max_ori,
+                target_rotation=target_rotation,
+                deadline=deadline,
+            )
+            fk_pos_err, fk_ori_err, _ = _mujoco_fk_error(
+                pin_q,
+                target_xyz,
+                target_rotation,
+            )
             if fk_pos_err <= max_pos and fk_ori_err <= max_ori:
                 return pin_q, pin_info
 
-            dls_q, dls_info = _ik_solve_to(target_xyz, null_ref=null_ref, q_seed=q_seed, steps=steps)
-            dls_pos_err, dls_ori_err, _ = _mujoco_fk_error(dls_q, target_xyz)
+            if pinocchio_pinned:
+                log_event(
+                    "IK_SOLVE",
+                    "PINOCCHIO_REQUIRED_REJECT",
+                    backend="pinocchio",
+                    failure_reason="pinocchio_fk_validation_failed",
+                    pos_err=fk_pos_err,
+                    ori_err=fk_ori_err,
+                    config_fingerprint=_runtime_config_fingerprint(),
+                )
+                return pin_q, pin_info
+
+            dls_q, dls_info = _ik_solve_to(
+                target_xyz,
+                null_ref=null_ref,
+                q_seed=q_seed,
+                steps=steps,
+                pos_tol=max_pos,
+                ori_tol=max_ori,
+                target_rotation=target_rotation,
+                deadline=deadline,
+            )
+            dls_pos_err, dls_ori_err, _ = _mujoco_fk_error(
+                dls_q,
+                target_xyz,
+                target_rotation,
+            )
             use_dls = (
                 (dls_pos_err <= max_pos and dls_ori_err <= max_ori)
                 or (dls_pos_err + 0.15 * dls_ori_err < fk_pos_err + 0.15 * fk_ori_err)
@@ -1001,9 +1509,22 @@ def _solve_ik_to(
             if use_dls:
                 return dls_q, dls_info
             return pin_q, pin_info
+        except MotionProbeTimeout:
+            raise
         except Exception as exc:
             log_event("IK_SOLVE", "BACKEND_FALLBACK", backend="pinocchio", failure_reason=str(exc))
-    return _ik_solve_to(target_xyz, null_ref=null_ref, q_seed=q_seed, steps=steps)
+            if pinocchio_pinned:
+                raise RuntimeError(f"required_pinocchio_solve_failed:{exc}") from exc
+    return _ik_solve_to(
+        target_xyz,
+        null_ref=null_ref,
+        q_seed=q_seed,
+        steps=steps,
+        pos_tol=max_pos,
+        ori_tol=max_ori,
+        target_rotation=target_rotation,
+        deadline=deadline,
+    )
 
 
 def _solve_safe_goal_candidates(target_xyz, base_null_ref, label=""):
@@ -1123,17 +1644,42 @@ def _ik_ori_limit_for_label(label: str) -> float:
     return IK_PLAN_ORI_ERR_LIMIT
 
 
-def _null_ref_candidates(null_ref: Optional[np.ndarray]) -> list[np.ndarray]:
+def _null_ref_candidates(
+    null_ref: Optional[np.ndarray],
+    seed_key: str = "",
+) -> list[np.ndarray]:
     base_ref = np.asarray(null_ref if null_ref is not None else GRASP_READY, dtype=float).copy()
     refs = [current_q(), base_ref, GRASP_READY.copy(), _ELBOW_UP_REF.copy()]
-    if _grouped_wall_bounds() is not None:
+    if _grouped_wall_bounds() is not None and joint_limits_valid(
+        _WALL_RIGHT_REF, arm_ranges[:, 0], arm_ranges[:, 1]
+    ):
         refs.append(_WALL_RIGHT_REF.copy())
     if _LAST_SUCCESSFUL_SEED is not None:
         refs.append(_LAST_SUCCESSFUL_SEED.copy())
-    for delta in (0.18, -0.18):
-        ref = base_ref.copy()
-        ref[1] = np.clip(ref[1] + delta, arm_ranges[1, 0], arm_ranges[1, 1])
-        refs.append(ref)
+
+    # Pinocchio does not expose a stable Panda arm-angle parameterization here.
+    # Use a deterministic, low-discrepancy Halton design over all seven real
+    # hardware joint ranges instead of coupling only joints 3/5/7.
+    def radical_inverse(index: int, base: int) -> float:
+        result = 0.0
+        factor = 1.0 / base
+        while index:
+            result += factor * (index % base)
+            index //= base
+            factor /= base
+        return result
+
+    digest = hashlib.sha256(seed_key.encode("utf-8")).digest()
+    offset = 1 + int.from_bytes(digest[:4], "little") % 4096
+    primes = (2, 3, 5, 7, 11, 13, 17)
+    lower = arm_ranges[:, 0]
+    span = arm_ranges[:, 1] - lower
+    for sample_index in range(24):
+        unit = np.array(
+            [radical_inverse(offset + sample_index, prime) for prime in primes],
+            dtype=float,
+        )
+        refs.append(lower + unit * span)
     unique = []
     seen = set()
     for ref in refs:
@@ -1142,7 +1688,7 @@ def _null_ref_candidates(null_ref: Optional[np.ndarray]) -> list[np.ndarray]:
         if key not in seen:
             seen.add(key)
             unique.append(clipped)
-    return unique
+    return unique[:32]
 
 
 def _ranked_ik_goals(
@@ -1152,6 +1698,8 @@ def _ranked_ik_goals(
     ignored_body_names: Optional[Sequence[str]] = None,
     max_valid_candidates: Optional[int] = None,
     start_q: Optional[Sequence[float]] = None,
+    target_rotation: Optional[np.ndarray] = None,
+    deadline: Optional[float] = None,
 ) -> list[IKAttemptResult]:
     planner = _get_ompl_planner()
     pos_limit = _ik_pos_limit_for_label(label)
@@ -1172,16 +1720,33 @@ def _ranked_ik_goals(
     )
 
     for candidate_idx, xyz in enumerate(_target_xyz_candidates(target_xyz, label)):
-        for seed_idx, ref in enumerate(_null_ref_candidates(null_ref)):
+        _check_deadline(deadline, f"{label}:target_variation", len(attempts))
+        seed_key = f"{label}:{','.join(f'{float(v):.6f}' for v in xyz)}"
+        for seed_idx, ref in enumerate(_null_ref_candidates(null_ref, seed_key)):
+            _check_deadline(deadline, f"{label}:ik_seed", len(attempts))
             q_seed = reference_q if seed_idx == 0 else ref
+            log_event(
+                "IK_SEED",
+                "TRY",
+                phase=label,
+                candidate_id=candidate_idx,
+                seed_id=seed_idx,
+                q_target=_round_vec(q_seed, 6),
+            )
             q, info = _solve_ik_to(
                 xyz,
                 null_ref=ref,
                 q_seed=q_seed,
                 pos_limit=pos_limit,
                 ori_limit=ori_limit,
+                target_rotation=target_rotation,
+                deadline=deadline,
             )
-            fk_pos_err, fk_ori_err, fk_ee_xyz = _mujoco_fk_error(q, xyz)
+            fk_pos_err, fk_ori_err, fk_ee_xyz = _mujoco_fk_error(
+                q,
+                xyz,
+                target_rotation,
+            )
             pos_err = fk_pos_err
             ori_err = fk_ori_err
             joint_ok = joint_limits_valid(q, arm_ranges[:, 0], arm_ranges[:, 1])
@@ -1247,13 +1812,17 @@ def _ranked_ik_goals(
                 joint_limit_valid=joint_ok,
                 state_valid=state_valid,
                 state_invalid_reason=state_reason,
-                failure_reason=None if reason == IK_SUCCESS else reason,
+                failure_reason=(
+                    None if reason == IK_SUCCESS else "ik_candidate_rejected"
+                ),
+                position_within_limit=pos_err <= pos_limit,
+                orientation_within_limit=ori_err <= ori_limit,
                 score=round(score, 5),
             )
             valid_count = sum(1 for item in attempts if item.failure_reason == IK_SUCCESS)
             if valid_count >= valid_limit:
                 return rank_ik_attempts(attempts)
-            if len(attempts) >= MAX_IK_ATTEMPTS_PER_SEGMENT and valid_count > 0:
+            if len(attempts) >= MAX_IK_ATTEMPTS_PER_SEGMENT:
                 return rank_ik_attempts(attempts)
 
     return rank_ik_attempts(attempts)
@@ -1539,6 +2108,7 @@ def _move_pose_safe(
     label: str = "",
     cautious_motion: bool = False,
     allow_wall_bypass: bool = True,
+    target_rotation: Optional[np.ndarray] = None,
 ) -> bool:
     global _LAST_SUCCESSFUL_SEED
     if allow_wall_bypass:
@@ -1546,18 +2116,45 @@ def _move_pose_safe(
             np.asarray(target_xyz, dtype=float)
         )
         if bypass is not None:
-            side, waypoints = bypass
-            for index, waypoint in enumerate(waypoints, start=1):
-                if not _move_pose_safe(
-                    waypoint,
+            side, cartesian_gateways = bypass
+            planner = _get_ompl_planner()
+            fixed_valid = False
+            fixed_q = _WALL_RIGHT_REF
+            if planner is not None:
+                fixed_valid, fixed_reason, fixed_q = _validated_wall_right_q(
+                    planner, ignored_body_names
+                )
+                log_event(
+                    "WALL_GATEWAY_VALIDATE",
+                    "OK" if fixed_valid else "REJECT",
+                    phase=label,
+                    failure_reason=None if fixed_valid else fixed_reason,
+                    q_target=_round_vec(fixed_q, 4),
+                )
+            if fixed_valid:
+                if not _move_with_ompl(
+                    goal_q=fixed_q,
                     grip=grip,
-                    null_ref=cube_null_ref(waypoint),
                     ignored_body_names=ignored_body_names,
-                    label=f"wall gateway {side} {index} for {label}",
-                    cautious_motion=cautious_motion,
-                    allow_wall_bypass=False,
+                    planner_name=DEFAULT_PLANNER_NAME,
+                    time_limit=DEFAULT_TIME_LIMIT,
+                    label=f"wall gateway_q {side} for {label}",
+                    settle_steps_per_wp=DEFAULT_SETTLE_STEPS_PER_WP,
+                    final_settle_steps=DEFAULT_FINAL_SETTLE_STEPS,
                 ):
-                    return False
+                    fixed_valid = False
+            if not fixed_valid:
+                for index, waypoint in enumerate(cartesian_gateways, start=1):
+                    if not _move_pose_safe(
+                        waypoint,
+                        grip=grip,
+                        null_ref=cube_null_ref(waypoint),
+                        ignored_body_names=ignored_body_names,
+                        label=f"wall gateway {side} {index} for {label}",
+                        cautious_motion=cautious_motion,
+                        allow_wall_bypass=False,
+                    ):
+                        return False
     _log_arm_state(
         "MOVE_POSE",
         "START",
@@ -1571,6 +2168,7 @@ def _move_pose_safe(
         null_ref,
         label,
         ignored_body_names=ignored_body_names,
+        target_rotation=target_rotation,
     )
     valid_attempts = [item for item in ranked_attempts if item.failure_reason == IK_SUCCESS]
     if not valid_attempts:
@@ -1676,12 +2274,16 @@ def probe_motion_to(
     label: str = "motion probe",
     ignored_body_names: Optional[Sequence[str]] = None,
     time_limit: Optional[float] = None,
+    target_rotation: Optional[np.ndarray] = None,
+    deadline: Optional[float] = None,
 ) -> dict:
     """Run IK and a real OMPL solve without mutating the live simulation."""
     qpos_before = data.qpos.copy()
     qvel_before = data.qvel.copy()
     ctrl_before = data.ctrl.copy()
     started = time.perf_counter()
+    budget = float(time_limit if time_limit is not None else min(DEFAULT_TIME_LIMIT, 6.0))
+    deadline = deadline if deadline is not None else time.monotonic() + budget
     result = {
         "success": False,
         "ik_success": False,
@@ -1689,8 +2291,10 @@ def probe_motion_to(
         "planning_time": 0.0,
         "path_length": 0.0,
         "failure_reason": "ik_unreachable",
+        "attempted_seeds": 0,
     }
     try:
+        _check_deadline(deadline, "probe_start")
         planner = _get_ompl_planner()
         if planner is None:
             result["failure_reason"] = "ompl_unavailable"
@@ -1698,28 +2302,58 @@ def probe_motion_to(
         target = np.asarray(target_xyz, dtype=float)
         bypass = _grouped_wall_bypass_waypoints(target)
         route_targets: list[tuple[str, np.ndarray]] = []
+        gateway_required = bypass is not None
         if bypass is not None:
-            side, waypoints = bypass
-            route_targets.extend(
-                (f"wall gateway {side} {index} for {label}", waypoint)
-                for index, waypoint in enumerate(waypoints, start=1)
-            )
+            side, cartesian_gateways = bypass
             result["route"] = f"wall_{side}"
         else:
             result["route"] = "direct"
         route_targets.append((label, target))
-
-        solve_time = float(
-            time_limit
-            if time_limit is not None
-            else min(DEFAULT_TIME_LIMIT, 6.0)
-        )
         virtual_q = current_q().copy()
         path_length = 0.0
         waypoint_count = 0
-        for segment_index, (segment_label, segment_target) in enumerate(
-            route_targets, start=1
-        ):
+        segment_count = 0
+        if gateway_required:
+            fixed_valid, fixed_reason, fixed_q = _validated_wall_right_q(
+                planner, ignored_body_names
+            )
+            result["fixed_gateway_validation"] = fixed_reason
+            log_event(
+                "WALL_GATEWAY_VALIDATE",
+                "OK" if fixed_valid else "REJECT",
+                phase=label,
+                q_target=_round_vec(fixed_q, 4),
+                failure_reason=None if fixed_valid else fixed_reason,
+            )
+            if fixed_valid:
+                _check_deadline(deadline, "fixed_gateway_ompl")
+                gateway_trajectory, gateway_info = planner.plan(
+                    start_q=virtual_q,
+                    goal_q=fixed_q,
+                    time_limit=_remaining_probe_segment_time(deadline),
+                    planner_name=DEFAULT_PLANNER_NAME,
+                    ignored_body_names=ignored_body_names,
+                    fragile_mode=False,
+                )
+                if gateway_trajectory is not None:
+                    segment_count += 1
+                    virtual_q = np.asarray(gateway_trajectory[-1], dtype=float).copy()
+                    path_length += float(gateway_info.get("path_length_joint_space", 0.0))
+                    waypoint_count += int(gateway_info.get("num_waypoints", len(gateway_trajectory)))
+                    result["gateway_mode"] = "fixed_q"
+                else:
+                    fixed_valid = False
+                    result["fixed_gateway_validation"] = "ompl_no_path"
+            if not fixed_valid:
+                result["gateway_mode"] = "cartesian"
+                route_targets = [
+                    (f"wall gateway {side} {index} for {label}", waypoint)
+                    for index, waypoint in enumerate(cartesian_gateways, start=1)
+                ] + route_targets
+
+        for route_index, (segment_label, segment_target) in enumerate(route_targets):
+            segment_index = segment_count + 1
+            _check_deadline(deadline, f"segment_{segment_index}_ik", result["attempted_seeds"])
             attempts = _ranked_ik_goals(
                 segment_target,
                 cube_null_ref(segment_target),
@@ -1727,7 +2361,12 @@ def probe_motion_to(
                 ignored_body_names=ignored_body_names,
                 max_valid_candidates=2,
                 start_q=virtual_q,
+                target_rotation=(
+                    target_rotation if route_index == len(route_targets) - 1 else None
+                ),
+                deadline=deadline,
             )
+            result["attempted_seeds"] += len(attempts)
             valid_attempts = [
                 attempt
                 for attempt in attempts
@@ -1738,20 +2377,34 @@ def probe_motion_to(
                     attempts[0].failure_reason if attempts else "ik_unreachable"
                 )
                 result["failed_segment"] = segment_index
+                if attempts:
+                    best = attempts[0]
+                    result.update(
+                        position_error_m=float(best.pos_err),
+                        orientation_error_rad=float(best.ori_err),
+                        joint_limit_valid=bool(best.joint_limit_valid),
+                        collision_valid=bool(best.state_valid),
+                        collision_reason=best.state_invalid_reason,
+                    )
                 return result
+
+            result["ik_success"] = True
 
             trajectory = None
             info = {}
+            selected_attempt = None
             for attempt in valid_attempts:
+                _check_deadline(deadline, f"segment_{segment_index}_ompl", result["attempted_seeds"])
                 trajectory, info = planner.plan(
                     start_q=virtual_q,
                     goal_q=attempt.q,
-                    time_limit=solve_time,
+                    time_limit=_remaining_probe_segment_time(deadline),
                     planner_name=DEFAULT_PLANNER_NAME,
                     ignored_body_names=ignored_body_names,
                     fragile_mode=False,
                 )
                 if trajectory is not None:
+                    selected_attempt = attempt
                     break
             if trajectory is None:
                 result["failure_reason"] = "ompl_no_path_found"
@@ -1759,8 +2412,17 @@ def probe_motion_to(
                 return result
 
             virtual_q = np.asarray(trajectory[-1], dtype=float).copy()
+            if selected_attempt is not None:
+                result.update(
+                    position_error_m=float(selected_attempt.pos_err),
+                    orientation_error_rad=float(selected_attempt.ori_err),
+                    joint_limit_valid=bool(selected_attempt.joint_limit_valid),
+                    collision_valid=bool(selected_attempt.state_valid),
+                    collision_reason=selected_attempt.state_invalid_reason,
+                )
             path_length += float(info.get("path_length_joint_space", 0.0))
             waypoint_count += int(info.get("num_waypoints", len(trajectory)))
+            segment_count = segment_index
 
         result.update(
             success=True,
@@ -1770,7 +2432,17 @@ def probe_motion_to(
             failure_reason=None,
             planner_name=info.get("planner_name", DEFAULT_PLANNER_NAME),
             waypoint_count=waypoint_count,
-            segment_count=len(route_targets),
+            segment_count=segment_count,
+        )
+        return result
+    except MotionProbeTimeout as exc:
+        result.update(
+            success=False,
+            ik_success=False,
+            ompl_success=False,
+            failure_reason="motion_probe_timeout",
+            timeout_phase=exc.phase,
+            attempted_seeds=max(result.get("attempted_seeds", 0), exc.attempted_seeds),
         )
         return result
     finally:
@@ -1827,24 +2499,44 @@ def _move_to_grasp_ready(
     grasp_ready_xyz = _mujoco_fk_xyz(GRASP_READY)
     bypass = _grouped_wall_bypass_waypoints(grasp_ready_xyz)
     if bypass is not None:
-        side, waypoints = bypass
-        for index, waypoint in enumerate(waypoints, start=1):
-            if not _move_pose_safe(
-                waypoint,
-                grip=grip,
-                null_ref=cube_null_ref(waypoint),
-                ignored_body_names=ignored_body_names,
-                label=f"wall gateway {side} {index} for transit {reason}",
-                allow_wall_bypass=False,
-            ):
-                log_event(
-                    "TRANSIT",
-                    "FAILED",
-                    phase=reason,
-                    target="GRASP_READY",
-                    failed_gateway=index,
+        side, cartesian_gateways = bypass
+        planner = _get_ompl_planner()
+        fixed_valid, _, fixed_q = (
+            _validated_wall_right_q(planner, ignored_body_names)
+            if planner is not None
+            else (False, "ompl_unavailable", _WALL_RIGHT_REF)
+        )
+        route_ok = fixed_valid and _move_with_ompl(
+            goal_q=fixed_q,
+            grip=grip,
+            ignored_body_names=ignored_body_names,
+            planner_name=DEFAULT_PLANNER_NAME,
+            time_limit=DEFAULT_TIME_LIMIT,
+            label=f"wall gateway_q {side} for transit {reason}",
+            settle_steps_per_wp=DEFAULT_SETTLE_STEPS_PER_WP,
+            final_settle_steps=DEFAULT_FINAL_SETTLE_STEPS,
+        )
+        if not route_ok:
+            route_ok = all(
+                _move_pose_safe(
+                    waypoint,
+                    grip=grip,
+                    null_ref=cube_null_ref(waypoint),
+                    ignored_body_names=ignored_body_names,
+                    label=f"wall gateway {side} {index} for transit {reason}",
+                    allow_wall_bypass=False,
                 )
-                return False
+                for index, waypoint in enumerate(cartesian_gateways, start=1)
+            )
+        if not route_ok:
+            log_event(
+                "TRANSIT",
+                "FAILED",
+                phase=reason,
+                target="GRASP_READY",
+                failed_gateway="gateway_route",
+            )
+            return False
     ok = _move_with_ompl(
         goal_q=GRASP_READY,
         grip=grip,
@@ -1965,7 +2657,15 @@ def _set_held_object(object_name: Optional[str]) -> None:
     if object_name is not None:
         _set_live_carry_constraint(object_name, True)
         if _live_collision_policy is not None:
-            _live_collision_policy.attach_body(object_name)
+            prefix = _arm_prefix(ACTIVE_ARM)
+            _live_collision_policy.attach_body(
+                object_name,
+                allowed_robot_body_names=(
+                    f"{prefix}hand",
+                    f"{prefix}left_finger",
+                    f"{prefix}right_finger",
+                ),
+            )
         parent_body_name = f"{_arm_prefix(ACTIVE_ARM)}hand"
         for planner in _planner_by_arm.values():
             planner.attach_body(object_name, parent_body_name)
@@ -2108,7 +2808,9 @@ def pick(
         distance_to_target=_distance_xy_to_base(cube_pos),
         approach_clearance=approach_clearance,
     )
-    if obstacle_distance < MIN_PICK_OBSTACLE_CLEARANCE:
+    if obstacle_distance < MIN_PICK_OBSTACLE_CLEARANCE and any(
+        name not in _wall_ids for name in _obstacle_ids
+    ):
         print(
             f"[exec][OBSTACLE_AVOID] cancel pick({obj}): "
             f"distance={obstacle_distance:.3f}m threshold={MIN_PICK_OBSTACLE_CLEARANCE:.3f}m"
@@ -2187,9 +2889,28 @@ def pick(
             approach_clearance=pregrasp_clearance,
             xy_distance=round(object_xy_distance, 4),
         )
-    pregrasp_xyz = cube_pos + np.array([0.0, 0.0, pregrasp_clearance])
-    grasp_xyz = cube_pos + np.array([0.0, 0.0, grasp_offset])
-    lift_xyz = cube_pos + np.array([0.0, 0.0, approach_clearance])
+    grasp_candidates = _grasp_pose_candidates(
+        cube_pos,
+        grasp_offset,
+        pregrasp_clearance,
+        approach_clearance,
+        lateral_enabled=not is_circle,
+    )
+    selected_grasp = _select_grasp_pose_candidate(obj, grasp_candidates, cube_ref)
+    if selected_grasp is None:
+        _log_arm_state(
+            "PICK",
+            "FAILED",
+            object_id=obj,
+            phase="grasp_candidate_selection",
+            failure_reason="no_ik_feasible_collision_free_grasp_candidate",
+        )
+        return
+    grasp_candidate_name = str(selected_grasp["name"])
+    grasp_rotation = np.asarray(selected_grasp["rotation"], dtype=float)
+    pregrasp_xyz = np.asarray(selected_grasp["pregrasp_xyz"], dtype=float)
+    grasp_xyz = np.asarray(selected_grasp["grasp_xyz"], dtype=float)
+    lift_xyz = np.asarray(selected_grasp["lift_xyz"], dtype=float)
     _log_arm_state(
         "PICK_TARGETS",
         "SET",
@@ -2198,6 +2919,8 @@ def pick(
         pregrasp_xyz=_round_vec(pregrasp_xyz, 4),
         grasp_xyz=_round_vec(grasp_xyz, 4),
         lift_xyz=_round_vec(lift_xyz, 4),
+        grasp_candidate=grasp_candidate_name,
+        approach_vector=_round_vec(selected_grasp["approach"], 3),
         cautious_motion=cautious_motion,
     )
 
@@ -2207,8 +2930,9 @@ def pick(
         grip=OPEN_GRIP,
         null_ref=cube_ref,
         ignored_body_names=None,
-        label=f"pick({obj}) pregrasp",
+        label=f"pick({obj}) pregrasp {grasp_candidate_name}",
         cautious_motion=cautious_motion,
+        target_rotation=grasp_rotation,
     ):
         _check_obstacles_fallen(f"pick({obj}) pregrasp")
         _log_arm_state("PICK", "FAILED", object_id=obj, phase="pregrasp", target_xyz=_round_vec(pregrasp_xyz, 4), failure_reason="move_pregrasp_failed")
@@ -2221,13 +2945,15 @@ def pick(
     grasp_ignored = list(
         dict.fromkeys([obj, *(additional_ignored_body_names or [])])
     )
+    transit_ignored = list(dict.fromkeys(additional_ignored_body_names or []))
     if not _move_pose_safe(
         grasp_xyz,
         grip=OPEN_GRIP,
         null_ref=cube_ref,
         ignored_body_names=grasp_ignored,
-        label=f"pick({obj}) grasp",
+        label=f"pick({obj}) grasp {grasp_candidate_name}",
         cautious_motion=cautious_motion,
+        target_rotation=grasp_rotation,
     ):
         _check_obstacles_fallen(f"pick({obj}) grasp")
         _log_arm_state("PICK", "FAILED", object_id=obj, phase="grasp", target_xyz=_round_vec(grasp_xyz, 4), failure_reason="move_grasp_failed")
@@ -2262,9 +2988,10 @@ def pick(
         lift_xyz,
         grip=grip_target,
         null_ref=cube_ref,
-        ignored_body_names=grasp_ignored,
-        label=f"pick({obj}) lift",
+        ignored_body_names=transit_ignored,
+        label=f"pick({obj}) lift {grasp_candidate_name}",
         cautious_motion=cautious_motion,
+        target_rotation=grasp_rotation,
     ):
         # If lift planning fails after grasping, release immediately and let the
         # closed-loop system replan from the table state.
@@ -2377,54 +3104,76 @@ def place(
 
     bypass = _grouped_wall_bypass_waypoints(preplace_xyz)
     if bypass is not None:
-        side, waypoints = bypass
+        side, cartesian_gateways = bypass
+        planner = _get_ompl_planner()
+        fixed_valid, fixed_reason, fixed_q = (
+            _validated_wall_right_q(planner, None)
+            if planner is not None
+            else (False, "ompl_unavailable", _WALL_RIGHT_REF)
+        )
         _log_arm_state(
             "WALL_BYPASS",
             "SELECT",
             object_id=obj,
             phase=side,
             target_xyz=_round_vec(place_pos, 4),
-            bypass_waypoints=[_round_vec(waypoint, 4) for waypoint in waypoints],
+            gateway_q=_round_vec(fixed_q, 4),
+            gateway_mode="fixed_q" if fixed_valid else "cartesian",
+            fixed_gateway_validation=fixed_reason,
         )
-        for index, waypoint in enumerate(waypoints, start=1):
-            if not _move_pose_safe(
-                waypoint,
+        route_ok = False
+        if fixed_valid:
+            route_ok = _move_with_ompl(
+                goal_q=fixed_q,
                 grip=_held_grip_target,
-                null_ref=cube_null_ref(waypoint),
-                ignored_body_names=[obj],
-                label=f"grouped wall bypass {side} {index}",
-                cautious_motion=False,
-                allow_wall_bypass=False,
-            ):
-                drop(obj)
-                _set_held_object(None)
-                _log_arm_state(
-                    "WALL_BYPASS",
-                    "FAILED",
-                    object_id=obj,
-                    phase=f"{side}_{index}",
-                    target_xyz=_round_vec(waypoint, 4),
-                    failure_reason="wall_bypass_failed",
-                )
-                return
-            still_held, object_z = _object_lifted(obj)
-            object_xyz = np.asarray(_object_xyz(obj), dtype=float)
-            grasp_distance = float(
-                np.linalg.norm(object_xyz - np.asarray(_ee_xyz(), dtype=float))
+                ignored_body_names=None,
+                planner_name=DEFAULT_PLANNER_NAME,
+                time_limit=DEFAULT_TIME_LIMIT,
+                label=f"grouped wall gateway_q {side}",
+                settle_steps_per_wp=DEFAULT_SETTLE_STEPS_PER_WP,
+                final_settle_steps=DEFAULT_FINAL_SETTLE_STEPS,
             )
-            if not still_held or grasp_distance > 0.18:
-                drop(obj)
-                _set_held_object(None)
-                _log_arm_state(
-                    "WALL_BYPASS",
-                    "FAILED",
-                    object_id=obj,
-                    phase=f"{side}_{index}",
-                    object_z=round(object_z, 4),
-                    distance_to_target=round(grasp_distance, 4),
-                    failure_reason="object_lost_during_wall_bypass",
+        if not route_ok:
+            route_ok = all(
+                _move_pose_safe(
+                    waypoint,
+                    grip=_held_grip_target,
+                    null_ref=cube_null_ref(waypoint),
+                    ignored_body_names=None,
+                    label=f"grouped wall gateway {side} {index}",
+                    allow_wall_bypass=False,
                 )
-                return
+                for index, waypoint in enumerate(cartesian_gateways, start=1)
+            )
+        if not route_ok:
+            drop(obj)
+            _set_held_object(None)
+            _log_arm_state(
+                "WALL_BYPASS",
+                "FAILED",
+                object_id=obj,
+                phase=side,
+                failure_reason="wall_gateway_route_failed",
+            )
+            return
+        still_held, object_z = _object_lifted(obj)
+        object_xyz = np.asarray(_object_xyz(obj), dtype=float)
+        grasp_distance = float(
+            np.linalg.norm(object_xyz - np.asarray(_ee_xyz(), dtype=float))
+        )
+        if not still_held or grasp_distance > 0.18:
+            drop(obj)
+            _set_held_object(None)
+            _log_arm_state(
+                "WALL_BYPASS",
+                "FAILED",
+                object_id=obj,
+                phase=side,
+                object_z=round(object_z, 4),
+                distance_to_target=round(grasp_distance, 4),
+                failure_reason="object_lost_during_wall_bypass",
+            )
+            return
         _log_arm_state(
             "WALL_BYPASS",
             "OK",
@@ -2437,7 +3186,7 @@ def place(
         preplace_xyz,
         grip=_held_grip_target,
         null_ref=place_ref,
-        ignored_body_names=[obj],
+        ignored_body_names=None,
         label=f"place({x:.3f}, {y:.3f}, {target_z:.3f}) preplace",
         cautious_motion=cautious_motion,
     ):
@@ -2468,7 +3217,7 @@ def place(
         release_xyz,
         grip=_held_grip_target,
         null_ref=place_ref,
-        ignored_body_names=[obj],
+        ignored_body_names=None,
         label=f"place({x:.3f}, {y:.3f}, {target_z:.3f}) release",
         cautious_motion=cautious_motion,
     ):

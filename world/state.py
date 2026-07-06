@@ -34,6 +34,7 @@ class ObstacleState:
     radius: float
     height: Literal["short", "long"]
     size: tuple[float, float, float] | None = None
+    kind: Literal["obstacle", "wall"] = "obstacle"
 
 
 @dataclass(frozen=True)

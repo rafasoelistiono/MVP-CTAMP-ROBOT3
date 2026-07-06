@@ -269,7 +269,7 @@ def prepare_scene_variant(
                     else DEFAULT_OBSTACLE_HALF_HEIGHT
                 )
                 size = getattr(state, "size", None)
-                wall = scene_key == "align_grouped_tidy_wall_world"
+                wall = getattr(state, "kind", "obstacle") == "wall"
                 inserts.append(
                     _obstacle_body(
                         state.id,

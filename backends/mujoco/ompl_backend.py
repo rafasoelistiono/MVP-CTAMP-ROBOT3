@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
+import time
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -16,6 +18,38 @@ except ImportError as e:
         "OMPL Python bindings are not installed or not importable. "
         "Install OMPL and make sure 'from ompl import base, geometric' works."
     ) from e
+
+
+class _GaussianValidStateSamplerCompat(ob.ValidStateSampler):
+    """Gaussian boundary sampler for OMPL builds that omit its Python binding."""
+
+    def __init__(self, si):
+        super().__init__(si)
+        self._si = si
+        self._sampler = si.allocStateSampler()
+        self._space = si.getStateSpace()
+        self._stddev = 0.1 * float(self._space.getMaximumExtent())
+        self.setName("GaussianValidStateSampler")
+
+    def sample(self, state):
+        mean = self._si.allocState()
+        gaussian = self._si.allocState()
+        for _ in range(self.getNrAttempts()):
+            self._sampler.sampleUniform(mean)
+            self._sampler.sampleGaussian(gaussian, mean, self._stddev)
+            mean_valid = self._si.isValid(mean)
+            gaussian_valid = self._si.isValid(gaussian)
+            if mean_valid != gaussian_valid:
+                self._space.copyState(state, mean if mean_valid else gaussian)
+                return True
+        return False
+
+    def sampleNear(self, state, near, distance):
+        for _ in range(self.getNrAttempts()):
+            self._sampler.sampleGaussian(state, near, min(distance, self._stddev))
+            if self._si.isValid(state):
+                return True
+        return False
 
 
 class ClearanceObjective(ob.StateCostIntegralObjective):
@@ -66,6 +100,20 @@ class PandaOMPLPlanner:
 
     DEFAULT_ARM_JOINTS = [f"joint{i}" for i in range(1, 8)]
 
+    @staticmethod
+    def _called_from_motion_probe() -> bool:
+        """Detect the existing probe call path without changing its caller."""
+        frame = inspect.currentframe()
+        try:
+            frame = frame.f_back if frame is not None else None
+            while frame is not None:
+                if frame.f_code.co_name == "probe_motion_to":
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
     def __init__(
         self,
         model: mujoco.MjModel,
@@ -74,6 +122,7 @@ class PandaOMPLPlanner:
         robot_body_names: Optional[Sequence[str]] = None,
         arm_joint_names: Optional[Sequence[str]] = None,
         obstacle_body_names: Optional[Sequence[str]] = None,
+        obstacle_kinds: Optional[Sequence[tuple[str, str]]] = None,
     ):
         self.model = model
         self.live_data = data
@@ -84,6 +133,7 @@ class PandaOMPLPlanner:
             model=self.model,
             robot_body_names=tuple(self.robot_body_names),
             obstacle_body_names=obstacle_body_names,
+            obstacle_kinds=obstacle_kinds,
         )
         self.arm_joint_names: List[str] = list(arm_joint_names or self.DEFAULT_ARM_JOINTS)
 
@@ -161,7 +211,15 @@ class PandaOMPLPlanner:
             relative_position,
             relative_rotation,
         )
-        self.collision_policy.attach_body(body_name)
+        gripper_prefix = parent_body_name.removesuffix("hand")
+        self.collision_policy.attach_body(
+            body_name,
+            allowed_robot_body_names=(
+                parent_body_name,
+                f"{gripper_prefix}left_finger",
+                f"{gripper_prefix}right_finger",
+            ),
+        )
 
     def detach_body(self, body_name: str) -> None:
         self._attached_body_transforms.pop(body_name, None)
@@ -176,6 +234,7 @@ class PandaOMPLPlanner:
         ignored_body_names: Optional[Sequence[str]] = None,
         simplify: bool = True,
         fragile_mode: bool = False,
+        probe_mode: Optional[bool] = None,
     ) -> Tuple[Optional[np.ndarray], dict]:
         """
         Plan a collision-free joint trajectory from start_q to goal_q.
@@ -194,6 +253,13 @@ class PandaOMPLPlanner:
             )
 
         solve_time = float(time_limit if time_limit is not None else self.cfg.time_limit)
+        plan_started = time.monotonic()
+        if probe_mode is None:
+            probe_mode = self._called_from_motion_probe()
+        if probe_mode:
+            # A probe only needs path existence.  Simplification used to run
+            # past the probe deadline after solve() had already succeeded.
+            simplify = False
         if self.cfg.valid_state_sampler == "obstacle_based":
             # PathSimplifier can shortcut back through a narrow obstacle band.
             # Keep the collision-checked raw path and only densify it below.
@@ -233,6 +299,10 @@ class PandaOMPLPlanner:
             "start_q": start_q.tolist(),
             "goal_q": goal_q.tolist(),
             "goal_attempts": [],
+            "probe_mode": bool(probe_mode),
+            "simplification_skipped": not simplify,
+            "simplification_time_s": 0.0,
+            "simplification_budget_s": 0.0,
         }
 
         try:
@@ -291,13 +361,39 @@ class PandaOMPLPlanner:
                 if not exact:
                     continue
 
-                if simplify:
-                    try:
-                        ss.simplifySolution()
-                    except Exception:
-                        pass
-
                 path = ss.getSolutionPath()
+                simplification_time = 0.0
+                simplification_budget = 0.0
+                simplification_error = None
+                if simplify:
+                    remaining_budget = max(
+                        0.0,
+                        solve_time - (time.monotonic() - plan_started),
+                    )
+                    simplification_budget = min(2.0, remaining_budget)
+                    if simplification_budget > 0.0:
+                        simplification_started = time.monotonic()
+                        try:
+                            ss.getPathSimplifier().simplify(
+                                path,
+                                simplification_budget,
+                                True,
+                            )
+                        except Exception as exc:
+                            simplification_error = str(exc)
+                        finally:
+                            simplification_time = (
+                                time.monotonic() - simplification_started
+                            )
+
+                last_info["goal_attempts"][-1].update({
+                    "simplification_time_s": simplification_time,
+                    "simplification_budget_s": simplification_budget,
+                })
+                if simplification_error is not None:
+                    last_info["goal_attempts"][-1]["simplification_error"] = (
+                        simplification_error
+                    )
                 raw = self._extract_path(path)
                 dense = self._densify_path(raw, step=self.cfg.waypoint_step)
                 invalid_waypoint = next(
@@ -321,6 +417,8 @@ class PandaOMPLPlanner:
                     "selected_goal_q": goal_try.tolist(),
                     "num_waypoints": int(dense.shape[0]),
                     "path_length_joint_space": float(self._path_length(dense)),
+                    "simplification_time_s": simplification_time,
+                    "simplification_budget_s": simplification_budget,
                 })
                 return dense, last_info
 
@@ -403,6 +501,15 @@ class PandaOMPLPlanner:
     def _configure_valid_state_sampler(self, si: ob.SpaceInformation) -> None:
         sampler = (self.cfg.valid_state_sampler or "uniform").strip().lower()
         if sampler == "uniform":
+            return
+        if sampler == "gaussian":
+            si.setValidStateSamplerAllocator(
+                lambda space_information: (
+                    ob.GaussianValidStateSampler(space_information)
+                    if hasattr(ob, "GaussianValidStateSampler")
+                    else _GaussianValidStateSamplerCompat(space_information)
+                )
+            )
             return
         if sampler != "obstacle_based":
             raise ValueError(f"Unsupported valid-state sampler: {sampler}")
@@ -591,6 +698,7 @@ def make_default_panda_planner(
     robot_body_names: Optional[Sequence[str]] = None,
     arm_joint_names: Optional[Sequence[str]] = None,
     obstacle_body_names: Optional[Sequence[str]] = None,
+    obstacle_kinds: Optional[Sequence[tuple[str, str]]] = None,
 ) -> PandaOMPLPlanner:
     return PandaOMPLPlanner(
         model=model,
@@ -598,6 +706,7 @@ def make_default_panda_planner(
         robot_body_names=robot_body_names,
         arm_joint_names=arm_joint_names,
         obstacle_body_names=obstacle_body_names,
+        obstacle_kinds=obstacle_kinds,
         config=OMPLConfig(
             planner_name=planner_name,
             fragile_planner_name=fragile_planner_name,

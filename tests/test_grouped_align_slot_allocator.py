@@ -76,7 +76,7 @@ def test_group_order_correct(slots, gt):
 def test_tidy_groups_stay_in_two_right_side_y_lanes(slots, world, gt):
     wall = world.obstacles[0]
     right_edge = wall.pose[0] + wall.size[0] / 2.0 + 0.13
-    lane_x = {"blue_lane": 0.22, "red_lane": 0.36}
+    lane_x = {"blue_lane": 0.26, "red_lane": 0.36}
     for group in gt.groups:
         xs = [
             pose[0]
