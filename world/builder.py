@@ -6,8 +6,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from task_planning.types import ALLOWED_ACTIONS
-
 from .state import (
     ChallengeConfig,
     GroupedTidyConfig,
@@ -16,6 +14,8 @@ from .state import (
     TidyGroup,
     WorldState,
 )
+
+ALLOWED_ACTIONS = frozenset({"pick", "place"})
 
 
 VALID_VARIANTS = {

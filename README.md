@@ -1,54 +1,20 @@
-# CTAMP Robot - Align Grouped Tidy Wall World
+# CTAMP Robot
 
-Repo ini menjalankan pipeline CTAMP untuk satu task: `align` pada scene `align_grouped_tidy_wall_world`.
+Target repo now uses the migrated `ctamp` pipeline from `ctamp_learned_heuristic`.
 
-Alur utama:
+Main flow:
 
-1. Load context: `contexts/examples/align_grouped_tidy_wall_world.md`
-2. Load atau generate TaskPlan JSON: `task_plans/examples/align_grouped_tidy_wall_world.json`
-3. Validasi schema, object ID, predicate, dan urutan `pick/place`
-4. Alokasi slot grouped tidy dengan obstacle-aware offset
-5. Jalankan MuJoCo/OMPL/IK atau deterministic test runner
-6. Tulis telemetry summary dan manifest ke `logs/`
+1. Read scene YAML or `CONTEXT.MD` adapter.
+2. Build grouped tidy slots and MuJoCo world.
+3. Run source motion probe, Panda IK, TMM A* search, cost, planning, and learning modules.
+4. Write `final_plan.json`, `metrics.json`, `challenge_ablation.json`, `scene_summary.json`, and `OBSERVATION.md`.
 
-## Commands
-
-Generate/validasi plan dari response file:
+Commands:
 
 ```bash
-python -m cli.generate_plan \
-  --context contexts/examples/align_grouped_tidy_wall_world.md \
-  --task align \
-  --response-file task_plans/examples/align_grouped_tidy_wall_world.json \
-  --output task_plans/generated
+python -m cli.run_simulation --context contexts/examples/align_grouped_tidy_wall_world.md --output runs/example
+python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --output runs/example_yaml
+python -m cli.generate_plan --context contexts/examples/align_grouped_tidy_wall_world.md --output task_plans/generated
 ```
 
-Run simulation:
-
-```bash
-python -m cli.run_simulation \
-  --plan task_plans/examples/align_grouped_tidy_wall_world.json \
-  --context contexts/examples/align_grouped_tidy_wall_world.md \
-  --scene align_grouped_tidy_wall_world \
-  --runtime-profile obstacle \
-  --robust-align
-```
-
-Run tests:
-
-```bash
-pytest
-```
-
-## Important Paths
-
-- `plugins/align_task.py`: align task validation, runtime tuning, progress, goal verification.
-- `world/builder.py`: context parser and `WorldState` builder.
-- `world/slot_allocator.py`: line and grouped tidy slot allocation.
-- `task_planning/`: plan schema, validation, candidate generation, scoring, LLM prompt.
-- `execution/runner.py`: generic `pick/place` loop plus align recovery.
-- `execution/primitives.py`: adapter from task steps to MuJoCo primitives.
-- `configuration/`: typed runtime profiles.
-- `telemetry/`: manifest, naming, summary CSV.
-
-Generated artifacts are ignored: `.pytest_cache/`, `__pycache__/`, `.ruff_cache/`, `logs/`, `models/generated/`, `task_plans/generated/`.
+Old TaskPlan/OMPL/adaptive-cache runner was removed. Use `ctamp.*` modules for learning, planning, cost, search, and TMM.

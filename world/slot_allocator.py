@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import math
-from task_planning.types import SlotConfig
+from dataclasses import dataclass
+from typing import Literal
 
 from .state import GroupedTidyConfig, TidyGroup, WorldState
 
 
 WALL_SLOT_CLEARANCE_M = 0.20
+
+
+@dataclass(frozen=True)
+class SlotConfig:
+    type: Literal["line"]
+    axis: str = "x"
+    spacing_m: float = 0.125
+    row_y: float = -0.06
+    center_x: float = 0.22
+    base_z: float = 0.83
 
 
 class SlotAllocationError(ValueError):
