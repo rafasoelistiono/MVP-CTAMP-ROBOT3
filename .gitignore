@@ -16,3 +16,4 @@ models/generated/
 task_plans/generated/
 venv/
 PROJECT_CONTEXT.txt
+runs/

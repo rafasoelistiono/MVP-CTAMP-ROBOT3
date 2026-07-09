@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
-import time
 import tempfile
 from pathlib import Path
 
@@ -24,6 +25,10 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--context", type=Path, help="CONTEXT.MD-style scene context.")
     parser.add_argument("--output", type=Path, help="Run artifact directory.")
     parser.add_argument("--log-dir", default=ROOT_DIR / "runs", type=Path)
+    parser.add_argument("--render-run", type=Path, help="Replay saved run artifacts without planning.")
+    parser.add_argument("--render-fps", type=float, default=30.0)
+    parser.add_argument("--render-speed", "--speed", dest="render_speed", type=float, default=1.0)
+    parser.add_argument("--render-loop", action="store_true")
     parser.add_argument("--max-retries-per-object", type=int)
 
     parser.add_argument("--max-objects", type=int)
@@ -44,6 +49,74 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--robot", default="panda_left")
     parser.add_argument("--learning-mode", default="online")
     return parser.parse_args()
+
+
+def _next_run_index(log_dir: Path) -> int:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    counter_path = log_dir / ".run_index"
+    try:
+        current = int(counter_path.read_text(encoding="utf-8").strip() or "0")
+    except FileNotFoundError:
+        current = 0
+    next_index = current + 1
+    counter_path.write_text(f"{next_index}\n", encoding="utf-8")
+    return next_index
+
+
+def _write_render_manifest(output: Path, config_path: Path, run_index: int) -> None:
+    saved_config = output / "scene_config.yaml"
+    shutil.copyfile(config_path, saved_config)
+    command = [
+        sys.executable,
+        "-m",
+        "ctamp.experiments.view_scene_plan",
+        "--config",
+        str(saved_config),
+        "--plan",
+        str(output / "final_plan.json"),
+        "--project-root",
+        str(ROOT_DIR),
+    ]
+    manifest = {
+        "schema_version": "ctamp-render/v1",
+        "run_index": run_index,
+        "config": saved_config.name,
+        "plan": "final_plan.json",
+        "command": command,
+    }
+    (output / "render_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8",
+    )
+
+
+def _render_saved_run(args: argparse.Namespace) -> int:
+    run_dir = args.render_run
+    if run_dir is None:
+        raise ValueError("--render-run is required")
+    config_path = run_dir / "scene_config.yaml"
+    plan_path = run_dir / "final_plan.json"
+    if not config_path.exists() or not plan_path.exists():
+        raise FileNotFoundError(
+            f"saved run must contain scene_config.yaml and final_plan.json: {run_dir}"
+        )
+    command = [
+        sys.executable,
+        "-m",
+        "ctamp.experiments.view_scene_plan",
+        "--config",
+        str(config_path),
+        "--plan",
+        str(plan_path),
+        "--project-root",
+        str(ROOT_DIR),
+        "--fps",
+        str(args.render_fps),
+        "--speed",
+        str(args.render_speed),
+    ]
+    if args.render_loop:
+        command.append("--loop")
+    return subprocess.call(command, cwd=ROOT_DIR)
 
 
 def _context_config(context_path: Path) -> dict:
@@ -156,7 +229,8 @@ def _run_config(config_path: Path, args: argparse.Namespace) -> int:
     if not config_path.exists():
         raise FileNotFoundError(f"scene config not found: {config_path}")
     scene_id = yaml.safe_load(config_path.read_text(encoding="utf-8"))["scene"]["scene_id"]
-    output = args.output or args.log_dir / f"{scene_id}_{time.strftime('%Y%m%d_%H%M%S')}"
+    run_index = _next_run_index(args.log_dir)
+    output = args.output or args.log_dir / f"{scene_id}_run_{run_index:03d}"
     metrics = run_scene_pipeline(
         config_path,
         output,
@@ -165,12 +239,19 @@ def _run_config(config_path: Path, args: argparse.Namespace) -> int:
         project_root=ROOT_DIR,
         viewer=bool(args.viewer),
     )
+    metrics["run_index"] = run_index
+    (output / "metrics.json").write_text(
+        json.dumps(metrics, indent=2) + "\n", encoding="utf-8",
+    )
+    _write_render_manifest(output, config_path, run_index)
     sys.stdout.write(json.dumps(metrics, indent=2) + "\n")
     return 0 if metrics["solution_found"] else 2
 
 
 def main() -> int:
     args = _arguments()
+    if args.render_run is not None:
+        return _render_saved_run(args)
     config_path = args.config
     if config_path is not None:
         return _run_config(config_path, args)
