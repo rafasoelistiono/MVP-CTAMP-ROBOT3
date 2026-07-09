@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 license = {file = "LICENSE"}
 dependencies = [
   "fastapi>=0.100.0",
-  "imageio>=2.31",
   "matplotlib>=3.7",
   "mujoco>=2.3.3",
   "networkx>=3.0",

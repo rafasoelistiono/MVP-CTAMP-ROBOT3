@@ -25,8 +25,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help="Run artifact directory.")
     parser.add_argument("--log-dir", default=ROOT_DIR / "runs", type=Path)
     parser.add_argument("--max-retries-per-object", type=int)
-    parser.add_argument("--render-video", action="store_true")
-    parser.add_argument("--fps", type=int, default=20)
+
     parser.add_argument("--max-objects", type=int)
 
     # Legacy args accepted so old commands keep invoking the replacement pipeline.
@@ -162,8 +161,6 @@ def _run_config(config_path: Path, args: argparse.Namespace) -> int:
         config_path,
         output,
         max_retries=args.max_retries_per_object,
-        render_video=args.render_video,
-        fps=args.fps,
         max_objects=args.max_objects,
         project_root=ROOT_DIR,
         viewer=bool(args.viewer),

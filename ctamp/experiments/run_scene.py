@@ -104,65 +104,10 @@ def _interpolate_polyline_nd(points, frames_per_segment: int):
         yield list(pts[-1])
 
 
-def _render_video(
-    backend: MuJoCoBackend,
-    actions: list[dict],
-    output: Path,
-    fps: int,
-    real_panda: bool,
-) -> Path:
-    import imageio.v2 as imageio
-
-    video_path = output / "simulation.mp4"
-    backend.reset()
-    ik = PandaIKSolver(backend) if real_panda else None
-    with imageio.get_writer(video_path, fps=fps, codec="libx264", quality=7) as writer:
-        for action in actions:
-            object_id = action["object_id"]
-            for phase in ("transit", "transfer"):
-                if real_panda:
-                    joint_points = action[f"{phase}_joint_waypoints"]
-                    ik.set_gripper_width(
-                        0.08 if phase == "transit" else action.get("grasp_width", 0.066),
-                    )
-                    for qpos in _interpolate_joints(joint_points):
-                        ik.set_qpos(qpos)
-                        if phase == "transfer":
-                            site = ik.site_position()
-                            backend.set_body_pose(
-                                f"cube_{object_id}", [site[0], site[1], action["z"]],
-                            )
-                        writer.append_data(
-                            backend.render_offscreen(640, 480, camera="overview"),
-                        )
-                    if phase == "transit":
-                        grasp_width = action.get("grasp_width", 0.066)
-                        for width in np.linspace(0.08, grasp_width, 10):
-                            ik.set_gripper_width(float(width))
-                            writer.append_data(
-                                backend.render_offscreen(640, 480, camera="overview"),
-                            )
-                else:
-                    for xy in _interpolate_polyline(action[f"{phase}_waypoints"]):
-                        backend.set_body_pose("ee_probe", [xy[0], xy[1], 1.02])
-                        if phase == "transfer":
-                            backend.set_body_pose(
-                                f"cube_{object_id}", [xy[0], xy[1], action["z"]],
-                            )
-                        writer.append_data(
-                            backend.render_offscreen(640, 480, camera="overview"),
-                        )
-        for _ in range(fps):
-            writer.append_data(backend.render_offscreen(640, 480, camera="overview"))
-    return video_path
-
-
 def run(
     config_path: Path,
     output: Path,
     max_retries: int | None = None,
-    render_video: bool = False,
-    fps: int = 20,
     max_objects: int | None = None,
     project_root: Path | None = None,
     viewer: bool = False,
@@ -258,7 +203,53 @@ def run(
     target_objects = list(config["task"]["target_objects"])
     if max_objects is not None:
         target_objects = target_objects[:max_objects]
-    for object_id in target_objects:
+
+    def _next_object(pending: list[str]) -> str:
+        original_rank = {object_id: index for index, object_id in enumerate(target_objects)}
+
+        def score(object_id: str) -> float:
+            obj = objects[object_id]
+            slot = slots[object_id]
+            start = obj["pose"][:2]
+            goal = slot.position[:2]
+            transit_probe = planner.plan_xy(current_xy, start)
+            transfer_probe = planner.plan_xy(start, goal)
+            value = transit_probe.length + transfer_probe.length
+            if not transit_probe.success:
+                value += 5000.0
+            if not transfer_probe.success:
+                value += 3000.0
+            if transit_probe.metadata["route_type"] != "direct":
+                value += 200.0
+            if transfer_probe.metadata["route_type"] != "direct":
+                value += 200.0
+            # Stable tie-breaker keeps config intent when feasibility is similar.
+            return value + original_rank[object_id] * 0.01
+
+        ranked = sorted(pending, key=score)
+        if ik_solver is None or physical_qpos is None:
+            return ranked[0]
+        saved_qpos = ik_solver.current_qpos()
+        try:
+            for object_id in ranked[:4]:
+                object_pose = backend.get_body_pose(f"cube_{object_id}")[:3]
+                ik_solver.set_qpos(physical_qpos)
+                grasp = ik_solver.plan_physical_grasp(
+                    object_id, tuple(object_pose), start_qpos=physical_qpos,
+                    random_restarts=24,
+                )
+                if grasp.success:
+                    return object_id
+        finally:
+            ik_solver.set_qpos(saved_qpos)
+        return ranked[0]
+
+    pending_objects = list(target_objects)
+    attempted_objects = []
+    while pending_objects:
+        object_id = _next_object(pending_objects)
+        pending_objects.remove(object_id)
+        attempted_objects.append(object_id)
         obj, slot = objects[object_id], slots[object_id]
         arm_at_home = True
         if physics_executor is not None and physical_home_qpos is not None:
@@ -529,7 +520,7 @@ def run(
         all_objects_solved if completion_policy == "strict"
         else completion_ratio >= minimum_ratio
     )
-    tmm = _build_ordered_tmm(target_objects, motions)
+    tmm = _build_ordered_tmm(attempted_objects, motions)
     search_result = TMMAStar().search(tmm)
     success = accepted_completion and search_result.success
     metrics = {
@@ -597,10 +588,6 @@ def run(
 - Force-closure finger grasp/contact dynamics: **no; cubes are attached kinematically during transfer**
 """
     (output / "OBSERVATION.md").write_text(observation, encoding="utf-8")
-    if render_video and success:
-        video_path = _render_video(backend, plan_actions, output, fps, real_panda)
-        metrics["video"] = str(video_path)
-        _write_json(output / "metrics.json", metrics)
     if live_viewer is not None:
         while live_viewer.is_running():
             live_viewer.sync()
@@ -617,13 +604,10 @@ def main() -> int:
     parser.add_argument("--learning-mode", default="online")
     parser.add_argument("--max-retries-per-object", type=int)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--render-video", action="store_true")
     parser.add_argument("--viewer", action="store_true")
-    parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--max-objects", type=int)
     args = parser.parse_args()
     metrics = run(args.config, args.output, args.max_retries_per_object,
-                  render_video=args.render_video, fps=args.fps,
                   max_objects=args.max_objects, viewer=args.viewer)
     sys.stdout.write(json.dumps(metrics, indent=2) + "\n")
     return 0 if metrics["solution_found"] else 2
