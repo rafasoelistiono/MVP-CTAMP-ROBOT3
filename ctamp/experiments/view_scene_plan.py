@@ -25,7 +25,6 @@ def main() -> int:
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--interpolation-steps", type=int, default=4)
     parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--project-root", type=Path)
     args = parser.parse_args()
     if args.fps <= 0 or args.speed <= 0:
         parser.error("--fps and --speed must be positive")
@@ -33,9 +32,7 @@ def main() -> int:
         parser.error("--interpolation-steps must be at least 1")
 
     config = load_scene_config(args.config)
-    builder = MuJoCoSceneBuilder(
-        config, args.project_root or args.config.resolve().parents[2],
-    )
+    builder = MuJoCoSceneBuilder(config, args.config.resolve().parents[2])
     if builder.panda_asset.status != "real_panda_asset":
         raise RuntimeError("real Panda asset is required for joint-plan replay")
     backend = MuJoCoBackend()

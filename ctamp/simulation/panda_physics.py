@@ -67,7 +67,7 @@ class PandaPhysicsExecutor:
         self.mujoco.mj_forward(self.model, self.data)
 
     def command_arm(
-        self, target, tolerance: float = 0.025, max_steps: int = 350,
+        self, target, tolerance: float = 0.018, max_steps: int = 450,
     ) -> tuple[bool, float]:
         target_array = np.asarray(target, dtype=float)
         self.data.ctrl[self.arm_actuators] = target_array
@@ -79,16 +79,17 @@ class PandaPhysicsExecutor:
                 return True, error
         return False, error
 
-    def follow_joint_path(self, waypoints, max_joint_step: float = 0.035) -> tuple[bool, float]:
+    def follow_joint_path(self, waypoints, max_joint_step: float = 0.025) -> tuple[bool, float]:
         worst_error = 0.0
         for waypoint in waypoints:
             start = self.ik.current_qpos()
             goal = np.asarray(waypoint, dtype=float)
             count = max(1, int(np.ceil(np.max(np.abs(goal - start)) / max_joint_step)))
             for alpha in np.linspace(1.0 / count, 1.0, count):
-                target = start + alpha * (goal - start)
+                smooth = alpha * alpha * (3.0 - 2.0 * alpha)
+                target = start + smooth * (goal - start)
                 success, error = self.command_arm(
-                    target, tolerance=0.025, max_steps=320,
+                    target, tolerance=0.018, max_steps=450,
                 )
                 worst_error = max(worst_error, error)
                 if not success:
@@ -96,13 +97,18 @@ class PandaPhysicsExecutor:
         return True, worst_error
 
     def open_gripper(self, steps: int = 250) -> None:
-        self.data.ctrl[self.gripper_actuator] = 0.05
-        self.settle(steps)
+        self._ramp_gripper(0.05, steps)
 
     def close_gripper(self, width: float = 0.052, steps: int = 500) -> None:
         # The actuator controls one finger joint in meters; equality mirrors it.
-        self.data.ctrl[self.gripper_actuator] = float(np.clip(width / 2.0, 0.0, 0.05))
-        self.settle(steps)
+        self._ramp_gripper(float(np.clip(width / 2.0, 0.0, 0.05)), steps)
+
+    def _ramp_gripper(self, target: float, steps: int) -> None:
+        start = float(self.data.ctrl[self.gripper_actuator])
+        for alpha in np.linspace(0.0, 1.0, max(2, steps)):
+            smooth = alpha * alpha * (3.0 - 2.0 * alpha)
+            self.data.ctrl[self.gripper_actuator] = start + smooth * (target - start)
+            self._step()
 
     def set_carry_constraint(self, object_id: str, active: bool) -> None:
         """Activate transport weld only after contact-validated acquisition."""
@@ -198,7 +204,7 @@ class PandaPhysicsExecutor:
         left, right = self.finger_contacts(object_id)
         if left and right:
             self.set_carry_constraint(object_id, True)
-        tracked, lift_error = self.command_arm(lift_qpos, max_steps=600)
+        tracked, lift_error = self.follow_joint_path([lift_qpos], max_joint_step=0.018)
         self.settle(150)
         lifted_z = self.cube_z(object_id)
         lift_height = lifted_z - initial_z

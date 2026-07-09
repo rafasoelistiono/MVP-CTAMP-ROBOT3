@@ -152,6 +152,7 @@ def run(
     direct_only_failures = 0
     aware_corridor_routes = 0
     ik_solver = PandaIKSolver(backend) if real_panda else None
+    planning_backend = None
     ik_home = None
     physics_executor = None
     physical_qpos = None
@@ -174,14 +175,25 @@ def run(
             physics_executor = PandaPhysicsExecutor(backend, viewer=live_viewer)
             physics_executor.initialize_arm(physical_qpos)
             physics_executor.open_gripper(steps=120)
+            planning_backend = MuJoCoBackend()
+            planning_backend.load_model(xml_string=xml)
+            ik_solver = PandaIKSolver(planning_backend)
             ik_solver.set_qpos(physical_qpos)
+
+    def _sync_planning_scene() -> None:
+        if planning_backend is None:
+            return
+        for object_id in objects:
+            planning_backend.set_body_pose(
+                f"cube_{object_id}", backend.get_body_pose(f"cube_{object_id}"),
+            )
 
     def _move_arm_to_safe_pose() -> bool:
         if physics_executor is None or physical_home_qpos is None:
             return True
         physics_executor.open_gripper(steps=40)
         returned_home, _ = physics_executor.follow_joint_path(
-            [physical_home_qpos], max_joint_step=0.05,
+            [physical_home_qpos], max_joint_step=0.025,
         )
         if returned_home:
             return True
@@ -196,7 +208,7 @@ def run(
         if route is None:
             return False
         returned_home, _ = physics_executor.follow_joint_path(
-            route[1:], max_joint_step=0.04,
+            route[1:], max_joint_step=0.025,
         )
         return returned_home
 
@@ -229,6 +241,7 @@ def run(
         ranked = sorted(pending, key=score)
         if ik_solver is None or physical_qpos is None:
             return ranked[0]
+        _sync_planning_scene()
         saved_qpos = ik_solver.current_qpos()
         try:
             for object_id in ranked[:4]:
@@ -256,6 +269,7 @@ def run(
             if not _move_arm_to_safe_pose():
                 arm_at_home = False
             physical_qpos = physics_executor.ik.current_qpos()
+            _sync_planning_scene()
             ik_solver.set_qpos(physical_qpos)
         object_start_q = ik_solver.current_qpos() if ik_solver is not None else None
         start, goal = obj["pose"][:2], slot.position[:2]
@@ -378,16 +392,18 @@ def run(
                     ik_reason = None if tracked else "place tracking failed"
                 if ik_success:
                     physics_executor.set_carry_constraint(object_id, False)
+                    physics_executor.settle(steps=60)
                     physics_executor.open_gripper(steps=320)
+                    physics_executor.settle(steps=100)
                     if len(place_path.joint_waypoints) >= 2:
                         physics_executor.follow_joint_path(
-                            [place_path.joint_waypoints[-2]], max_joint_step=0.025,
+                            [place_path.joint_waypoints[-2]], max_joint_step=0.018,
                         )
                     reverse_to_lift = list(reversed(place_path.joint_waypoints[:-2]))
                     reverse_to_home = list(reversed(grasp.joint_waypoints[:-1]))
                     if reverse_to_lift or reverse_to_home:
                         physics_executor.follow_joint_path(
-                            [*reverse_to_lift, *reverse_to_home], max_joint_step=0.04,
+                            [*reverse_to_lift, *reverse_to_home], max_joint_step=0.025,
                         )
                     physics_executor.settle(steps=180)
                     final_position = backend.get_body_pose(f"cube_{object_id}")[:3]
@@ -588,10 +604,7 @@ def run(
 - Force-closure finger grasp/contact dynamics: **no; cubes are attached kinematically during transfer**
 """
     (output / "OBSERVATION.md").write_text(observation, encoding="utf-8")
-    if live_viewer is not None:
-        while live_viewer.is_running():
-            live_viewer.sync()
-            time.sleep(0.05)
+    if viewer_context is not None:
         viewer_context.__exit__(None, None, None)
     return metrics
 

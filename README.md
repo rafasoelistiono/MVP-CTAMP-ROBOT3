@@ -8,7 +8,7 @@ Main flow:
 
 1. Read scene YAML directly, or read `CONTEXT.MD` through the adapter in `cli.run_simulation`.
 2. Build grouped tidy slots, MuJoCo XML, and MuJoCo scene state.
-3. For every target object, choose the next object, probe transit and transfer routes, retry failed transfer probes, and optionally validate Panda IK plus physical pick/place execution.
+3. For every target object, choose the next object, probe transit and transfer routes, retry failed transfer probes, and optionally validate Panda IK plus physical pick/place execution. Physical IK/RRT planning uses a separate MuJoCo planning backend, so search-time joint writes do not move the live execution arm.
 4. Build an ordered Task-Motion Multigraph from attempted objects and motion results.
 5. Run TMM A* search over that graph.
 6. Write `final_plan.json`, `metrics.json`, `challenge_ablation.json`, `scene_summary.json`, and `OBSERVATION.md`.
@@ -18,8 +18,12 @@ Commands:
 ```bash
 python -m cli.run_simulation --context contexts/examples/align_grouped_tidy_wall_world.md --output runs/example
 python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --output runs/example_yaml
+python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --max-objects 3
+python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --viewer
 python -m cli.generate_plan --context contexts/examples/align_grouped_tidy_wall_world.md --output task_plans/generated
 ```
+
+If `--output` is omitted, artifacts are written to `runs/<scene_id>_YYYYMMDD_HHMMSS/`.
 
 Old TaskPlan/OMPL/adaptive-cache runner was removed. Use `ctamp.*` modules for learning, planning, cost, search, and TMM.
 
@@ -33,7 +37,7 @@ Bayangkan pipeline ini seperti proses kerja operator robot:
 2. **Tentukan tempat rapi.** Sistem membuat slot tujuan untuk setiap kubus berdasarkan warna dan grup.
 3. **Bangun dunia simulasi.** Sistem membuat scene MuJoCo dari config dan asset robot.
 4. **Cari jalur tiap kubus.** Sistem mengecek apakah robot bisa bergerak dari posisi saat ini ke kubus, lalu dari kubus ke slot tujuan.
-5. **Validasi gerakan robot.** Jika asset Panda lengkap tersedia, sistem mencoba IK, jalur joint, grasp, lift, place, dan pelepasan kubus.
+5. **Validasi gerakan robot.** Jika asset Panda lengkap tersedia, sistem mencoba IK, jalur joint, grasp, lift, place, dan pelepasan kubus. IK/RRT dicari di backend planning terpisah agar arm live tidak bergerak saat search.
 6. **Rangkai graf task-motion.** Setiap objek menjadi urutan `transit -> pick -> transfer -> place`; urutan itu dimasukkan ke TMM.
 7. **Cari solusi TMM.** A* memilih jalur dengan cost paling masuk akal dari root sampai goal.
 8. **Tulis hasil.** Sistem menyimpan plan, metrics, ringkasan scene, ablation challenge, dan observasi.
@@ -153,7 +157,7 @@ sequenceDiagram
     R->>P: plan_xy(object_start, tidy_slot)
     P-->>R: transfer MotionPlan
     alt Panda asset dan physical executor tersedia
-        R->>IK: plan_physical_grasp
+        R->>IK: plan_physical_grasp di planning backend
         IK-->>R: grasp waypoints
         R->>IK: solve lift/place path
         IK-->>R: joint waypoints
@@ -236,5 +240,6 @@ Beberapa hal tetap perlu dibedakan:
 
 - Motion probe awal adalah validasi geometrik 2D di bidang meja.
 - Jika asset Panda real terdeteksi, pipeline mencoba validasi IK 7-DOF, collision-aware path, grasp, lift, dan place.
+- IK/RRT planning dan physical execution memakai backend terpisah; ini mencegah gerakan live yang tidak disengaja saat solver mengeksplorasi konfigurasi joint.
 - Jika validasi fisik tidak lengkap, output tetap menyebutkan level validasi agar pembaca tidak mengira semua action sudah terbukti aman secara fisik penuh.
 - Modul learning, cost, symbolic planning, search, dan TMM tersedia di `ctamp.*`, tetapi jalur `run_scene` saat ini memakai ordered grouped-tidy scene adapter sebagai orchestrator utama.
