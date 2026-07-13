@@ -217,6 +217,8 @@ def run(
         target_objects = target_objects[:max_objects]
 
     def _next_object(pending: list[str]) -> str:
+        if config.get("task", {}).get("preserve_order"):
+            return pending[0]
         original_rank = {object_id: index for index, object_id in enumerate(target_objects)}
 
         def score(object_id: str) -> float:

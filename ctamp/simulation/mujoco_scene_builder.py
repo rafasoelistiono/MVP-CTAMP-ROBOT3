@@ -8,7 +8,14 @@ from xml.etree import ElementTree as ET
 from .panda_loader import PandaAsset, find_panda_asset
 from .scene import GoalSlot, generate_tidy_slots
 
-COLORS = {"blue": "0.1 0.25 0.9 1", "red": "0.9 0.1 0.1 1"}
+COLORS = {
+    "blue": "0.1 0.25 0.9 1",
+    "red": "0.9 0.1 0.1 1",
+    "green": "0.1 0.75 0.2 1",
+    "yellow": "0.95 0.8 0.1 1",
+    "orange": "0.95 0.45 0.1 1",
+    "purple": "0.55 0.25 0.85 1",
+}
 
 
 class MuJoCoSceneBuilder:
@@ -80,9 +87,10 @@ class MuJoCoSceneBuilder:
             half = " ".join(str(float(v) / 2) for v in obstacle["size"])
             ET.SubElement(world, "geom", name=obstacle["id"], type="box", pos=pos,
                           size=half, rgba="0.25 0.25 0.25 1")
-        cube_half = [float(v) / 2 for v in self.config["geometry"]["cube_size_xyz"]]
         self._add_tidy_tray(world)
         for obj in self.config["objects"]:
+            size_xyz = obj.get("size_xyz", self.config["geometry"]["cube_size_xyz"])
+            cube_half = [float(v) / 2 for v in size_xyz]
             body = ET.SubElement(world, "body", name=f"cube_{obj['id']}",
                                  pos=" ".join(str(v) for v in obj["pose"]))
             ET.SubElement(body, "freejoint", name=f"cube_{obj['id']}_free")

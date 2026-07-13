@@ -2,11 +2,13 @@ from pathlib import Path
 
 from cli.run_simulation import _context_config
 from ctamp.cost import EdgeCostCalculator
+from ctamp.experiments.run_stacking_v2 import build_phase_configs
 from ctamp.learning.heuristic_models import OnlineSGDModel
 from ctamp.planning.symbolic import PlanningProblem, SymbolicTaskPlanner
 from ctamp.search.tmm_astar import TMMAStar
 from ctamp.simulation.scene import generate_tidy_slots
 from ctamp.tmm.builder import TMMGraphBuilder
+import yaml
 
 
 def test_context_adapter_feeds_migrated_scene_pipeline():
@@ -24,3 +26,21 @@ def test_source_learning_planning_cost_search_tmm_are_imported():
     assert SymbolicTaskPlanner(PlanningProblem(objects={}, target_poses={})).solve() is not None
     assert TMMGraphBuilder is not None
     assert TMMAStar is not None
+
+
+def test_stacking_v2_builds_placeholder_then_large_to_small_stack():
+    config = yaml.safe_load(Path("configs/scenes/stacking_wall_world_v2.yaml").read_text())
+
+    phase1, phase2, summary = build_phase_configs(config)
+
+    assert phase1["task"]["target_objects"] == ["c6", "c5", "c4", "c3", "c2", "c1"]
+    assert phase2["task"]["target_objects"] == ["c6", "c5", "c4", "c3", "c2", "c1"]
+    assert phase2["task"]["preserve_order"] is True
+    assert summary["largest_to_smallest_order"] == ["c6", "c5", "c4", "c3", "c2", "c1"]
+    assert summary["safe_zone_positions"]["c6"][0] < summary["safe_zone_positions"]["c1"][0]
+    assert summary["safe_zone_positions"]["c1"][2] < 0.84
+    assert summary["safe_zone_positions"]["c6"][2] < 0.85
+    assert summary["final_stack_positions"]["c6"][:2] == [-0.30, -0.75]
+    assert summary["final_stack_positions"]["c6"][2] < summary["final_stack_positions"]["c1"][2]
+    assert len(generate_tidy_slots(phase1)) == 6
+    assert len(generate_tidy_slots(phase2)) == 6

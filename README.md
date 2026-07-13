@@ -19,9 +19,15 @@ Commands:
 python -m cli.run_simulation --context contexts/examples/align_grouped_tidy_wall_world.md --output runs/example
 python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --output runs/example_yaml
 python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --max-objects 3
+python -m cli.run_simulation_v2 --config configs/scenes/align_grouped_tidy_wall_world.yaml --output runs/example_v2
+python -m cli.run_stacking_v2 --config configs/scenes/stacking_wall_world_v2.yaml --output runs/stacking_v2
 python -m cli.run_simulation --config configs/scenes/align_grouped_tidy_wall_world.yaml --viewer
 python -m cli.generate_plan --context contexts/examples/align_grouped_tidy_wall_world.md --output task_plans/generated
 ```
+
+Use `python -m cli.run_simulation_v2` or installed script `ctamp-run-v2` for the v2 performance path. It keeps v1 intact and adds run-local `plan_xy` caching, safe headless MuJoCo batching, and `performance_v2` metrics.
+
+Use `python -m cli.run_stacking_v2` or installed script `ctamp-run-stacking-v2` for the v2 cube-stacking scenario. It runs one continuous MuJoCo scene/viewer from `1/6` to `6/6`, with preserved order `c6` largest through `c1` smallest. Safe-zone is a flat multi-slot preview area for future fallback logic. Add `--dry-run` to write preview configs without running MuJoCo.
 
 If `--output` is omitted, artifacts are written to `runs/<scene_id>_YYYYMMDD_HHMMSS/`.
 

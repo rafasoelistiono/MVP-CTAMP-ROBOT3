@@ -1,0 +1,83 @@
+scene:
+  scene_id: stacking_wall_world_v2
+  variant: stacking_wall_world_v2
+table:
+  x_range: [-0.85, 0.85]
+  y_range: [-1.10, 0.90]
+  z_top: 0.80
+  goal_center: [-0.52, -0.53, 0.833]
+  goal_area_size_xy: [0.56, 0.22]
+geometry:
+  cube_size_xyz: [0.066, 0.066, 0.066]
+robot:
+  id: panda_left
+  reach_min_xy: 0.25
+  reach_max_xy: 1.50
+  base_xy: [-0.42, -0.08]
+  base_z: 0.88
+  physical_start_qpos: [-1.251489, 1.391494, 1.007269, -1.429392, -1.832880, 2.695749, 2.102807]
+  capabilities: [pick, place]
+objects:
+  - {id: c1, class: cube, color: purple, size_xyz: [0.066, 0.066, 0.066], pose: [-0.0500, -0.5800, 0.833], reachable: true, near_obstacle: false}
+  - {id: c2, class: cube, color: blue, size_xyz: [0.069, 0.069, 0.069], pose: [0.1066, -0.4125, 0.8345], reachable: true, near_obstacle: false}
+  - {id: c3, class: cube, color: green, size_xyz: [0.072, 0.072, 0.072], pose: [0.1347, -0.4988, 0.836], reachable: true, near_obstacle: false}
+  - {id: c4, class: cube, color: yellow, size_xyz: [0.075, 0.075, 0.075], pose: [0.2300, -0.3261, 0.8375], reachable: true, near_obstacle: false}
+  - {id: c5, class: cube, color: orange, size_xyz: [0.078, 0.078, 0.078], pose: [0.0200, 0.4500, 0.839], reachable: true, near_obstacle: false}
+  - {id: c6, class: cube, color: red, size_xyz: [0.081, 0.081, 0.081], pose: [0.1090, 0.3708, 0.8405], reachable: true, near_obstacle: false}
+obstacles:
+  - id: frontal_tall_wall
+    kind: wall
+    pose: [0.00, -0.08, 1.60]
+    fragile: true
+    radius: 0.21
+    height: long
+    size: [0.08, 0.10, 1.60]
+task:
+  name: stack
+  target_objects: [c6, c5, c4, c3, c2, c1]
+  preserve_order: true
+  description: Stack six reachable cubes from largest bottom to smallest top in one continuous run; safe-zone positions are fallback planning hints.
+constraints:
+  preserve_obstacles: true
+  max_retries_per_object: 2
+  allowed_predicates: [at, clear, holding, handempty, stable]
+grouped_tidy:
+  enabled: true
+  require_ordered: true
+  slot_prefix: placeholder_slot
+  axis: z
+  spacing: 0.056
+  row_spacing: 0.090
+tidy_groups:
+  - id: placeholder_small_to_large
+    color: mixed
+    objects: [c1, c2, c3, c4, c5, c6]
+    center: [-0.52, -0.60, 0.96]
+physical_execution:
+  enabled: true
+  prioritize_side_access: true
+  require_force_closure: false
+  completion_policy: strict
+  minimum_completion_ratio: 1.0
+  allow_adaptive_grasp_orientation: true
+  cube_mass: 0.08
+  cube_friction: [2.5, 1.0, 0.5]
+  table_friction: [1.0, 0.01, 0.001]
+  grip_target_width: 0.052
+stacking_v2:
+  safe_zone_origin: [0.08, -0.50]
+  safe_zone_axis: x
+  safe_zone_spacing: 0.095
+  final_stack_xy: [-0.30, -0.75]
+  safe_zone_order_right_first: [c6, c5, c4, c3, c2, c1]
+  placeholder_order_small_to_large: [c1, c2, c3, c4, c5, c6]
+  final_order_bottom_to_top: [c6, c5, c4, c3, c2, c1]
+challenge:
+  type: frontal_tall_wall
+  enabled: true
+  obstacle_ids: [frontal_tall_wall]
+  require_obstacle_aware_slots: true
+  require_motion_probe: true
+  inflated_clearance_required: true
+  wall_blocks_direct_path: true
+  side_corridors_required: true

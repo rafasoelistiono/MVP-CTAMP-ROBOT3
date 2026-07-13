@@ -43,22 +43,35 @@ def load_scene_config(path: str | Path) -> dict[str, Any]:
 def generate_tidy_slots(config: dict[str, Any]) -> dict[str, GoalSlot]:
     tidy = config["grouped_tidy"]
     axis = tidy.get("axis", "y")
-    if axis not in {"x", "y"}:
-        raise ValueError("grouped tidy axis must be x or y")
+    if axis not in {"x", "y", "z"}:
+        raise ValueError("grouped tidy axis must be x, y, or z")
     prefix = tidy.get("slot_prefix", "tidy_slot")
     spacing = float(tidy["spacing"])
     slots: dict[str, GoalSlot] = {}
     for group in config["tidy_groups"]:
         objects = list(group["objects"])
+        explicit_positions = group.get("positions", {})
+        if explicit_positions:
+            for index, object_id in enumerate(objects):
+                position = tuple(float(v) for v in explicit_positions[object_id])
+                slots[object_id] = GoalSlot(
+                    name=f"{prefix}_{group['id']}_{index}",
+                    group_id=group["id"],
+                    color=group["color"],
+                    object_id=object_id,
+                    position=position,
+                )
+            continue
         center = tuple(float(v) for v in group["center"])
         midpoint = (len(objects) - 1) / 2.0
         for index, object_id in enumerate(objects):
             offset = (index - midpoint) * spacing
-            position = (
-                (center[0] + offset, center[1], center[2])
-                if axis == "x"
-                else (center[0], center[1] + offset, center[2])
-            )
+            if axis == "x":
+                position = (center[0] + offset, center[1], center[2])
+            elif axis == "y":
+                position = (center[0], center[1] + offset, center[2])
+            else:
+                position = (center[0], center[1], center[2] + offset)
             slots[object_id] = GoalSlot(
                 name=f"{prefix}_{group['id']}_{index}",
                 group_id=group["id"],
