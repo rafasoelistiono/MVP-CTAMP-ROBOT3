@@ -12,6 +12,8 @@ import yaml
 from ctamp.experiments.run_scene import run as run_scene_pipeline
 from world.builder import build_world_state
 
+from .common import exit_with_errors
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT_DIR / "configs/scenes/align_grouped_tidy_wall_world.yaml"
 
@@ -38,8 +40,12 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--benchmark-role")
     parser.add_argument("--benchmark-label")
     parser.add_argument("--experiment-label")
-    parser.add_argument("--robust-align", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--use-adaptive-cache", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--robust-align", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--use-adaptive-cache", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--motion-planner", default="mujoco")
     parser.add_argument("--robot", default="panda_left")
     parser.add_argument("--learning-mode", default="online")
@@ -87,7 +93,9 @@ def _context_config(context_path: Path) -> dict:
                 "fragile": obstacle.fragile,
                 "radius": obstacle.radius,
                 "height": obstacle.height,
-                "size": list(obstacle.size or (obstacle.radius * 2, obstacle.radius * 2, 1.6)),
+                "size": list(
+                    obstacle.size or (obstacle.radius * 2, obstacle.radius * 2, 1.6)
+                ),
             }
             for obstacle in world.obstacles
         ],
@@ -130,7 +138,9 @@ def _context_config(context_path: Path) -> dict:
             "table_friction": [1.0, 0.01, 0.001],
             "grip_target_width": 0.052,
         },
-        "challenge": None if world.challenge is None else {
+        "challenge": None
+        if world.challenge is None
+        else {
             "type": world.challenge.type,
             "enabled": world.challenge.enabled,
             "obstacle_ids": list(world.challenge.obstacle_ids),
@@ -155,8 +165,12 @@ def _materialize_context_config(context_path: Path, config_dir: Path) -> Path:
 def _run_config(config_path: Path, args: argparse.Namespace) -> int:
     if not config_path.exists():
         raise FileNotFoundError(f"scene config not found: {config_path}")
-    scene_id = yaml.safe_load(config_path.read_text(encoding="utf-8"))["scene"]["scene_id"]
-    output = args.output or args.log_dir / f"{scene_id}_{time.strftime('%Y%m%d_%H%M%S')}"
+    scene_id = yaml.safe_load(config_path.read_text(encoding="utf-8"))["scene"][
+        "scene_id"
+    ]
+    output = (
+        args.output or args.log_dir / f"{scene_id}_{time.strftime('%Y%m%d_%H%M%S')}"
+    )
     metrics = run_scene_pipeline(
         config_path,
         output,
@@ -176,19 +190,14 @@ def main() -> int:
         return _run_config(config_path, args)
     if args.context:
         with tempfile.TemporaryDirectory(prefix="ctamp_context_") as temp_dir:
-            return _run_config(_materialize_context_config(args.context, Path(temp_dir)), args)
+            return _run_config(
+                _materialize_context_config(args.context, Path(temp_dir)), args
+            )
     return _run_config(DEFAULT_CONFIG, args)
 
 
 def cli() -> None:
-    try:
-        raise SystemExit(main())
-    except KeyboardInterrupt:
-        print("Interrupted", file=sys.stderr)
-        raise SystemExit(130)
-    except (OSError, ValueError, RuntimeError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+    exit_with_errors(main)
 
 
 if __name__ == "__main__":

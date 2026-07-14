@@ -8,7 +8,13 @@ from pathlib import Path
 
 from ctamp.experiments.run_scene_v2 import run as run_scene_pipeline_v2
 
-from .run_simulation import DEFAULT_CONFIG, ROOT_DIR, _arguments, _materialize_context_config
+from .common import exit_with_errors
+from .run_simulation import (
+    DEFAULT_CONFIG,
+    ROOT_DIR,
+    _arguments,
+    _materialize_context_config,
+)
 
 
 def _run_config(config_path: Path, args) -> int:
@@ -16,8 +22,12 @@ def _run_config(config_path: Path, args) -> int:
 
     if not config_path.exists():
         raise FileNotFoundError(f"scene config not found: {config_path}")
-    scene_id = yaml.safe_load(config_path.read_text(encoding="utf-8"))["scene"]["scene_id"]
-    output = args.output or args.log_dir / f"{scene_id}_v2_{time.strftime('%Y%m%d_%H%M%S')}"
+    scene_id = yaml.safe_load(config_path.read_text(encoding="utf-8"))["scene"][
+        "scene_id"
+    ]
+    output = (
+        args.output or args.log_dir / f"{scene_id}_v2_{time.strftime('%Y%m%d_%H%M%S')}"
+    )
     metrics = run_scene_pipeline_v2(
         config_path,
         output,
@@ -36,19 +46,14 @@ def main() -> int:
         return _run_config(args.config, args)
     if args.context:
         with tempfile.TemporaryDirectory(prefix="ctamp_context_v2_") as temp_dir:
-            return _run_config(_materialize_context_config(args.context, Path(temp_dir)), args)
+            return _run_config(
+                _materialize_context_config(args.context, Path(temp_dir)), args
+            )
     return _run_config(DEFAULT_CONFIG, args)
 
 
 def cli() -> None:
-    try:
-        raise SystemExit(main())
-    except KeyboardInterrupt:
-        print("Interrupted", file=sys.stderr)
-        raise SystemExit(130)
-    except (OSError, ValueError, RuntimeError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+    exit_with_errors(main)
 
 
 if __name__ == "__main__":

@@ -41,12 +41,71 @@ class _ObjectExecution:
     placement_error: list[float] | None = None
 
 
+GRASP_APPROACHES = {
+    "top": (0.0, 0.0, -1.0),
+    "side_pos_x": (-1.0, 0.0, 0.0),
+    "side_neg_x": (1.0, 0.0, 0.0),
+    "side_pos_y": (0.0, -1.0, 0.0),
+    "side_neg_y": (0.0, 1.0, 0.0),
+}
+
+
 def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
 def _route_type(motion: object) -> str:
     return motion.metadata["route_type"]
+
+
+def _object_reach_ok(config: dict, obj: dict, start: list[float]) -> bool:
+    reach = math.dist(config["robot"]["base_xy"], start)
+    return bool(obj.get("reachable", True)) and (
+        float(config["robot"]["reach_min_xy"])
+        <= reach
+        <= float(config["robot"]["reach_max_xy"])
+    )
+
+
+def _probe_transfer(
+    planner: MuJoCoMotionPlanner,
+    start: list[float],
+    goal: tuple[float, ...],
+    retry_limit: int,
+):
+    attempts = 0
+    collision_failures = 0
+    motion = None
+    while attempts <= retry_limit:
+        attempts += 1
+        motion = planner.plan_xy(start, goal)
+        if motion.success:
+            break
+        collision_failures += 1
+    return motion, collision_failures, max(0, attempts - 1)
+
+
+def _completion_status(
+    per_object: list[dict], config: dict
+) -> tuple[bool, int, float, str, bool]:
+    all_objects_solved = all(item["success"] for item in per_object)
+    completed_objects = sum(item["success"] for item in per_object)
+    completion_ratio = completed_objects / len(per_object) if per_object else 1.0
+    physical_config = config.get("physical_execution", {})
+    completion_policy = physical_config.get("completion_policy", "strict")
+    minimum_ratio = float(physical_config.get("minimum_completion_ratio", 1.0))
+    accepted_completion = (
+        all_objects_solved
+        if completion_policy == "strict"
+        else completion_ratio >= minimum_ratio
+    )
+    return (
+        all_objects_solved,
+        completed_objects,
+        completion_ratio,
+        completion_policy,
+        accepted_completion,
+    )
 
 
 def _plan_action(
@@ -109,48 +168,84 @@ def _per_object_result(
     }
 
 
-def _build_ordered_tmm(object_ids: list[str], motions: dict[str, object]) -> TaskMotionMultigraph:
+def _build_ordered_tmm(
+    object_ids: list[str], motions: dict[str, object]
+) -> TaskMotionMultigraph:
     """Build one scalable, config-ordered task branch with existing TMM models."""
     graph = TaskMotionMultigraph()
     workspace = WorkspaceState()
     robot = RobotState(active_arm="left")
-    root = Vertex(vertex_id="root", robot_state=robot, workspace_state=workspace, is_root=True)
+    root = Vertex(
+        vertex_id="root", robot_state=robot, workspace_state=workspace, is_root=True
+    )
     graph.add_vertex(root)
     previous = root.vertex_id
     joint_spaces = (
         JointSpace(name="left_arm", joints=[f"panda_joint{i}" for i in range(1, 8)]),
-        JointSpace(name="left_arm_redundant", joints=[f"panda_joint{i}" for i in range(1, 8)]),
+        JointSpace(
+            name="left_arm_redundant", joints=[f"panda_joint{i}" for i in range(1, 8)]
+        ),
     )
     for object_id in object_ids:
         pick_id, place_id = f"pick_{object_id}", f"place_{object_id}"
-        graph.add_vertex(Vertex(vertex_id=pick_id, robot_state=robot, workspace_state=workspace))
-        graph.add_vertex(Vertex(vertex_id=place_id, robot_state=robot, workspace_state=workspace))
+        graph.add_vertex(
+            Vertex(vertex_id=pick_id, robot_state=robot, workspace_state=workspace)
+        )
+        graph.add_vertex(
+            Vertex(vertex_id=place_id, robot_state=robot, workspace_state=workspace)
+        )
         motion = motions[object_id]
         for joint_space in joint_spaces:
-            graph.add_edge(Edge(
-                source=previous, target=pick_id,
-                action=Action(action_id=f"transit_{object_id}", action_type="transit",
-                              object_id=object_id, arm="left"),
-                joint_space=joint_space, motion_plan=motion, cost=0.0,
-                flag_motion_planned=True,
-            ))
-            graph.add_edge(Edge(
-                source=pick_id, target=place_id,
-                action=Action(action_id=f"transfer_{object_id}", action_type="transfer",
-                              object_id=object_id, arm="left"),
-                joint_space=joint_space, motion_plan=motion,
-                cost=motion.length if motion.success else 1e6,
-                flag_motion_planned=True,
-            ))
+            graph.add_edge(
+                Edge(
+                    source=previous,
+                    target=pick_id,
+                    action=Action(
+                        action_id=f"transit_{object_id}",
+                        action_type="transit",
+                        object_id=object_id,
+                        arm="left",
+                    ),
+                    joint_space=joint_space,
+                    motion_plan=motion,
+                    cost=0.0,
+                    flag_motion_planned=True,
+                )
+            )
+            graph.add_edge(
+                Edge(
+                    source=pick_id,
+                    target=place_id,
+                    action=Action(
+                        action_id=f"transfer_{object_id}",
+                        action_type="transfer",
+                        object_id=object_id,
+                        arm="left",
+                    ),
+                    joint_space=joint_space,
+                    motion_plan=motion,
+                    cost=motion.length if motion.success else 1e6,
+                    flag_motion_planned=True,
+                )
+            )
         previous = place_id
-    goal = Vertex(vertex_id="goal", robot_state=robot, workspace_state=workspace, is_goal=True)
+    goal = Vertex(
+        vertex_id="goal", robot_state=robot, workspace_state=workspace, is_goal=True
+    )
     graph.add_vertex(goal)
     for joint_space in joint_spaces:
-        graph.add_edge(Edge(
-            source=previous, target="goal",
-            action=Action(action_id="done", action_type="transit", object_id="", arm="left"),
-            joint_space=joint_space, cost=0.0, flag_motion_planned=True,
-        ))
+        graph.add_edge(
+            Edge(
+                source=previous,
+                target="goal",
+                action=Action(
+                    action_id="done", action_type="transit", object_id="", arm="left"
+                ),
+                joint_space=joint_space,
+                cost=0.0,
+                flag_motion_planned=True,
+            )
+        )
     return graph
 
 
@@ -159,8 +254,10 @@ def _interpolate_polyline(points: Iterable[list[float]], frames_per_segment: int
     for start, goal in zip(pts, pts[1:], strict=False):
         for frame in range(frames_per_segment):
             t = frame / frames_per_segment
-            yield [start[0] + (goal[0] - start[0]) * t,
-                   start[1] + (goal[1] - start[1]) * t]
+            yield [
+                start[0] + (goal[0] - start[0]) * t,
+                start[1] + (goal[1] - start[1]) * t,
+            ]
     if pts:
         yield pts[-1]
 
@@ -214,8 +311,11 @@ def run(
         live_viewer.cam.azimuth = 90
         live_viewer.cam.elevation = -32
     planner = MuJoCoMotionPlanner(config)
-    retry_limit = (int(max_retries) if max_retries is not None
-                   else int(config["constraints"]["max_retries_per_object"]))
+    retry_limit = (
+        int(max_retries)
+        if max_retries is not None
+        else int(config["constraints"]["max_retries_per_object"])
+    )
     objects = {obj["id"]: obj for obj in config["objects"]}
     preserve_order = bool(config.get("task", {}).get("preserve_order"))
     per_object = []
@@ -225,9 +325,12 @@ def run(
     total_cost = 0.0
     motions = {}
     probe = planner.probe
-    home_xy = (float(config["robot"]["base_xy"][0])
-               + float(config["robot"]["reach_min_xy"]) + 0.02,
-               float(config["robot"]["base_xy"][1]))
+    home_xy = (
+        float(config["robot"]["base_xy"][0])
+        + float(config["robot"]["reach_min_xy"])
+        + 0.02,
+        float(config["robot"]["base_xy"][1]),
+    )
     current_xy = home_xy
     direct_only_failures = 0
     aware_corridor_routes = 0
@@ -242,14 +345,17 @@ def run(
     grasp_styles: dict[str, str | None] = {}
 
     def _grip_width(obj: dict) -> float:
-        return float(obj.get(
-            "grip_target_width",
-            config.get("physical_execution", {}).get("grip_target_width", 0.052),
-        ))
+        return float(
+            obj.get(
+                "grip_target_width",
+                config.get("physical_execution", {}).get("grip_target_width", 0.052),
+            )
+        )
 
     if ik_solver is not None:
         ik_home = ik_solver.solve_collision_free(
-            (home_xy[0], home_xy[1], 0.95), random_restarts=128,
+            (home_xy[0], home_xy[1], 0.95),
+            random_restarts=128,
         )
         if not ik_home.success:
             ik_failures += 1
@@ -272,7 +378,8 @@ def run(
             return
         for object_id in objects:
             planning_backend.set_body_pose(
-                f"cube_{object_id}", backend.get_body_pose(f"cube_{object_id}"),
+                f"cube_{object_id}",
+                backend.get_body_pose(f"cube_{object_id}"),
             )
 
     def _move_arm_to_safe_pose() -> bool:
@@ -280,7 +387,8 @@ def run(
             return True
         physics_executor.open_gripper(steps=40)
         returned_home, _ = physics_executor.follow_joint_path(
-            [physical_home_qpos], max_joint_step=0.025,
+            [physical_home_qpos],
+            max_joint_step=0.025,
         )
         if returned_home:
             return True
@@ -290,12 +398,16 @@ def run(
         planning_ik = PandaIKSolver(planning_backend)
         planning_ik.set_qpos(start_qpos)
         route = planning_ik.plan_joint_rrt(
-            start_qpos, physical_home_qpos, max_iterations=5000, rng_seed=90_000,
+            start_qpos,
+            physical_home_qpos,
+            max_iterations=5000,
+            rng_seed=90_000,
         )
         if route is None:
             return False
         returned_home, _ = physics_executor.follow_joint_path(
-            route[1:], max_joint_step=0.025,
+            route[1:],
+            max_joint_step=0.025,
         )
         return returned_home
 
@@ -311,12 +423,16 @@ def run(
         object_pose = backend.get_body_pose(f"cube_{object_id}")[:3]
         ik_solver.set_qpos(physical_qpos)
         grasp = ik_solver.plan_physical_grasp(
-            object_id, tuple(object_pose), start_qpos=physical_qpos,
+            object_id,
+            tuple(object_pose),
+            start_qpos=physical_qpos,
         )
         if not grasp.success and arm_at_home and physical_home_qpos is not None:
             ik_solver.set_qpos(physical_home_qpos)
             grasp = ik_solver.plan_physical_grasp(
-                object_id, tuple(object_pose), start_qpos=physical_home_qpos,
+                object_id,
+                tuple(object_pose),
+                start_qpos=physical_home_qpos,
                 random_restarts=192,
             )
         execution.ik_success = grasp.success
@@ -326,10 +442,13 @@ def run(
         if execution.ik_success:
             approach_q = np.asarray(grasp.joint_waypoints[-1])
             ik_solver.set_qpos(approach_q)
-            grasp_rotation = ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
+            grasp_rotation = (
+                ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
+            )
             lift = ik_solver.solve(
                 ik_solver.site_position() + np.array([0.0, 0.0, 0.14]),
-                seed=approach_q, orientation=grasp_rotation,
+                seed=approach_q,
+                orientation=grasp_rotation,
                 orientation_tolerance=0.10,
             )
             execution.ik_success = lift.success
@@ -369,7 +488,9 @@ def run(
         if execution.ik_success:
             execution.physical_stage = "physical_grasp"
             grasp_result = physics_executor.validate_grasp_and_lift(
-                object_id, approach_q, lift.qpos,
+                object_id,
+                approach_q,
+                lift.qpos,
                 grasp_site_target=np.asarray(object_pose) + np.array([0.0, 0.0, 0.02]),
                 grip_width=_grip_width(obj),
             )
@@ -395,13 +516,15 @@ def run(
             physics_executor.settle(steps=100)
             if len(place_path.joint_waypoints) >= 2:
                 physics_executor.follow_joint_path(
-                    [place_path.joint_waypoints[-2]], max_joint_step=0.018,
+                    [place_path.joint_waypoints[-2]],
+                    max_joint_step=0.018,
                 )
             reverse_to_lift = list(reversed(place_path.joint_waypoints[:-2]))
             reverse_to_home = list(reversed(grasp.joint_waypoints[:-1]))
             if reverse_to_lift or reverse_to_home:
                 physics_executor.follow_joint_path(
-                    [*reverse_to_lift, *reverse_to_home], max_joint_step=0.025,
+                    [*reverse_to_lift, *reverse_to_home],
+                    max_joint_step=0.025,
                 )
             physics_executor.settle(steps=180)
             final_position = backend.get_body_pose(f"cube_{object_id}")[:3]
@@ -412,7 +535,9 @@ def run(
                 float(np.linalg.norm(execution.placement_error[:2])) <= 0.07
             )
             execution.ik_success = execution.physical_tidy_success
-            execution.ik_reason = None if execution.physical_tidy_success else "cube missed tidy slot"
+            execution.ik_reason = (
+                None if execution.physical_tidy_success else "cube missed tidy slot"
+            )
         elif execution.physical_grip_success:
             physics_executor.set_carry_constraint(object_id, False)
             physics_executor.open_gripper(steps=250)
@@ -428,6 +553,70 @@ def run(
         ik_solver.set_qpos(physical_qpos)
         return execution
 
+    def _execute_ik_preview(
+        obj: dict, transit: object, motion: object
+    ) -> tuple[_ObjectExecution, int]:
+        execution = _ObjectExecution()
+        collision_count = 0
+        transit_targets = _dense_xyz(transit.waypoints, 0.95)[1:]
+        transit_ik = ik_solver.solve_path(transit_targets)
+        execution.ik_success = transit_ik.success
+        execution.transit_joint_waypoints = [
+            list(q) for q in transit_ik.joint_waypoints
+        ]
+        execution.ik_reason = transit_ik.reason
+        if not transit_ik.success and transit_ik.collision_pairs:
+            collision_count += 1
+        if execution.ik_success:
+            grasp = ik_solver.plan_grasp_candidates(
+                tuple(obj["pose"]),
+                start_qpos=transit_ik.joint_waypoints[-1],
+                random_restarts=48,
+            )
+            execution.ik_success = grasp.success
+            execution.grasp_style = grasp.grasp_style
+            execution.ik_reason = grasp.reason
+            if grasp.success:
+                execution.transit_joint_waypoints.extend(
+                    list(q) for q in grasp.joint_waypoints[1:]
+                )
+                ik_solver.set_qpos(grasp.joint_waypoints[-1])
+                adaptive_grasp_orientation = (
+                    ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
+                )
+        if execution.ik_success:
+            grasp_orientation = (
+                adaptive_grasp_orientation
+                if execution.grasp_style == "adaptive_oblique"
+                else ik_solver._rotation_from_approach(
+                    GRASP_APPROACHES[execution.grasp_style]
+                )
+                if execution.grasp_style in GRASP_APPROACHES
+                else None
+            )
+            transfer_targets = _dense_xyz(motion.waypoints, 0.938)[1:]
+            transfer_ik = ik_solver.solve_path(
+                transfer_targets,
+                orientation=grasp_orientation,
+            )
+            if not transfer_ik.success and (execution.grasp_style or "").startswith(
+                "adaptive_"
+            ):
+                ik_solver.set_qpos(grasp.joint_waypoints[-1])
+                transfer_ik = ik_solver.solve_path(transfer_targets)
+                if transfer_ik.success:
+                    execution.grasp_style = (
+                        f"{execution.grasp_style}_adaptive_transport"
+                    )
+            execution.ik_success = transfer_ik.success
+            execution.transfer_joint_waypoints = [list(grasp.joint_waypoints[-1])] + [
+                list(q) for q in transfer_ik.joint_waypoints[1:]
+            ]
+            execution.ik_reason = transfer_ik.reason
+            if not transfer_ik.success and transfer_ik.collision_pairs:
+                collision_count += 1
+        return execution, collision_count
+
     target_objects = list(config["task"]["target_objects"])
     if max_objects is not None:
         target_objects = target_objects[:max_objects]
@@ -435,7 +624,9 @@ def run(
     def _next_object(pending: list[str]) -> str:
         if preserve_order:
             return pending[0]
-        original_rank = {object_id: index for index, object_id in enumerate(target_objects)}
+        original_rank = {
+            object_id: index for index, object_id in enumerate(target_objects)
+        }
 
         def score(object_id: str) -> float:
             obj = objects[object_id]
@@ -466,7 +657,9 @@ def run(
                 object_pose = backend.get_body_pose(f"cube_{object_id}")[:3]
                 ik_solver.set_qpos(physical_qpos)
                 grasp = ik_solver.plan_physical_grasp(
-                    object_id, tuple(object_pose), start_qpos=physical_qpos,
+                    object_id,
+                    tuple(object_pose),
+                    start_qpos=physical_qpos,
                     random_restarts=24,
                 )
                 if grasp.success:
@@ -498,23 +691,16 @@ def run(
         if not probe.path_clear((tuple(start), tuple(goal))):
             direct_only_failures += 1
         aware_corridor_routes += int(transit.metadata["route_type"] != "direct")
-        attempts = 0
-        motion = None
-        while attempts <= retry_limit:
-            attempts += 1
-            motion = planner.plan_xy(start, goal)
-            if motion.success:
-                break
-            collision_failures += 1
-        retries = max(0, attempts - 1)
+        motion, transfer_failures, retries = _probe_transfer(
+            planner, start, goal, retry_limit
+        )
+        collision_failures += transfer_failures
         retries_used += retries
         route = _route_type(motion)
         motions[object_id] = motion
         aware_corridor_routes += int(route != "direct")
         execution = _ObjectExecution()
-        reach_ok = bool(obj.get("reachable", True)) and (
-            float(config["robot"]["reach_min_xy"]) <= reach <= float(config["robot"]["reach_max_xy"])
-        )
+        reach_ok = _object_reach_ok(config, obj, start)
         if ik_solver is not None:
             if not reach_ok:
                 execution.ik_success = False
@@ -523,82 +709,52 @@ def run(
                 execution.ik_success = False
                 execution.ik_reason = "no collision-free Panda home IK"
             elif physics_executor is not None and physical_qpos is not None:
-                execution = _execute_physical_pick_place(object_id, obj, slot, arm_at_home)
+                execution = _execute_physical_pick_place(
+                    object_id, obj, slot, arm_at_home
+                )
             else:
-                transit_targets = _dense_xyz(transit.waypoints, 0.95)[1:]
-                transit_ik = ik_solver.solve_path(transit_targets)
-                execution.ik_success = transit_ik.success
-                execution.transit_joint_waypoints = [list(q) for q in transit_ik.joint_waypoints]
-                execution.ik_reason = transit_ik.reason
-                if not transit_ik.success and transit_ik.collision_pairs:
-                    ik_collision_failures += 1
-                if execution.ik_success:
-                    grasp = ik_solver.plan_grasp_candidates(
-                        tuple(obj["pose"]), start_qpos=transit_ik.joint_waypoints[-1],
-                        random_restarts=48,
-                    )
-                    execution.ik_success = grasp.success
-                    execution.grasp_style = grasp.grasp_style
-                    execution.ik_reason = grasp.reason
-                    if grasp.success:
-                        execution.transit_joint_waypoints.extend(
-                            list(q) for q in grasp.joint_waypoints[1:]
-                        )
-                        ik_solver.set_qpos(grasp.joint_waypoints[-1])
-                        adaptive_grasp_orientation = (
-                            ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
-                        )
-                if execution.ik_success:
-                    approaches = {
-                        "top": (0.0, 0.0, -1.0),
-                        "side_pos_x": (-1.0, 0.0, 0.0),
-                        "side_neg_x": (1.0, 0.0, 0.0),
-                        "side_pos_y": (0.0, -1.0, 0.0),
-                        "side_neg_y": (0.0, 1.0, 0.0),
-                    }
-                    grasp_orientation = (
-                        adaptive_grasp_orientation
-                        if execution.grasp_style == "adaptive_oblique"
-                        else ik_solver._rotation_from_approach(approaches[execution.grasp_style])
-                        if execution.grasp_style in approaches
-                        else None
-                    )
-                    transfer_targets = _dense_xyz(motion.waypoints, 0.938)[1:]
-                    transfer_ik = ik_solver.solve_path(
-                        transfer_targets, orientation=grasp_orientation,
-                    )
-                    if not transfer_ik.success and (execution.grasp_style or "").startswith("adaptive_"):
-                        ik_solver.set_qpos(grasp.joint_waypoints[-1])
-                        transfer_ik = ik_solver.solve_path(transfer_targets)
-                        if transfer_ik.success:
-                            execution.grasp_style = f"{execution.grasp_style}_adaptive_transport"
-                    execution.ik_success = transfer_ik.success
-                    execution.transfer_joint_waypoints = [list(grasp.joint_waypoints[-1])] + [
-                        list(q) for q in transfer_ik.joint_waypoints[1:]
-                    ]
-                    execution.ik_reason = transfer_ik.reason
-                    if not transfer_ik.success and transfer_ik.collision_pairs:
-                        ik_collision_failures += 1
+                execution, collision_count = _execute_ik_preview(obj, transit, motion)
+                ik_collision_failures += collision_count
             if not execution.ik_success:
                 ik_failures += 1
                 ik_solver.set_qpos(object_start_q)
         grasp_styles[object_id] = execution.grasp_style
         reason = motion.metadata.get("reason")
         object_success = (
-            execution.ik_success if physics_executor is not None
+            execution.ik_success
+            if physics_executor is not None
             else transit.success and motion.success and execution.ik_success
         )
         if object_success:
             total_cost += transit.length + motion.length
             if physics_executor is None:
                 backend.set_body_pose(f"cube_{object_id}", slot.position)
-            plan_actions.append(_plan_action(
-                object_id, slot, route, transit, motion, execution, _grip_width(obj),
-            ))
-        per_object.append(_per_object_result(
-            object_id, slot, object_success, route, retries, reason,
-            transit, reach, motion, reach_ok, execution,
-        ))
+            plan_actions.append(
+                _plan_action(
+                    object_id,
+                    slot,
+                    route,
+                    transit,
+                    motion,
+                    execution,
+                    _grip_width(obj),
+                )
+            )
+        per_object.append(
+            _per_object_result(
+                object_id,
+                slot,
+                object_success,
+                route,
+                retries,
+                reason,
+                transit,
+                reach,
+                motion,
+                reach_ok,
+                execution,
+            )
+        )
         sys.stderr.write(
             f"[{len(per_object)}/{len(target_objects)}] {object_id}: "
             f"geometric={transit.success and motion.success} ik={execution.ik_success} "
@@ -606,38 +762,41 @@ def run(
         )
         if object_success:
             current_xy = slot.position[:2]
-    all_objects_solved = all(item["success"] for item in per_object)
-    completed_objects = sum(item["success"] for item in per_object)
-    completion_ratio = completed_objects / len(per_object) if per_object else 1.0
-    physical_config = config.get("physical_execution", {})
-    completion_policy = physical_config.get("completion_policy", "strict")
-    minimum_ratio = float(physical_config.get("minimum_completion_ratio", 1.0))
-    accepted_completion = (
-        all_objects_solved if completion_policy == "strict"
-        else completion_ratio >= minimum_ratio
-    )
+    (
+        all_objects_solved,
+        completed_objects,
+        completion_ratio,
+        completion_policy,
+        accepted_completion,
+    ) = _completion_status(per_object, config)
     tmm = _build_ordered_tmm(attempted_objects, motions)
     search_result = TMMAStar().search(tmm)
     success = accepted_completion and search_result.success
     metrics = {
-        "scene_id": config["scene"]["scene_id"], "planner_backend": "mujoco",
-        "robot_model_status": builder.panda_asset.status, "number_of_objects": len(objects),
-        "number_of_slots": len(slots), "number_of_obstacles": len(config["obstacles"]),
-        "tmm_vertices": tmm.vertex_count, "tmm_edges": tmm.edge_count,
+        "scene_id": config["scene"]["scene_id"],
+        "planner_backend": "mujoco",
+        "robot_model_status": builder.panda_asset.status,
+        "number_of_objects": len(objects),
+        "number_of_slots": len(slots),
+        "number_of_obstacles": len(config["obstacles"]),
+        "tmm_vertices": tmm.vertex_count,
+        "tmm_edges": tmm.edge_count,
         "expanded_vertices": search_result.nodes_expanded,
         "elapsed_time": time.perf_counter() - started,
-        "solution_found": success, "total_cost": total_cost if success else None,
+        "solution_found": success,
+        "total_cost": total_cost if success else None,
         "all_objects_solved": all_objects_solved,
         "completed_objects": completed_objects,
         "completion_ratio": completion_ratio,
         "completion_policy": completion_policy,
         "per_object_result": per_object,
         "failed_objects": [x["object_id"] for x in per_object if not x["success"]],
-        "collision_probe_failures": collision_failures, "retries_used": retries_used,
+        "collision_probe_failures": collision_failures,
+        "retries_used": retries_used,
         "validation_level": (
             "symbolic_ordered_branch + geometric_2d_probe + real_panda_7dof_ik_rrt_collision"
-            if real_panda else
-            "symbolic_ordered_branch + geometric_2d_probe + mujoco_scene_state"
+            if real_panda
+            else "symbolic_ordered_branch + geometric_2d_probe + mujoco_scene_state"
         ),
         "full_panda_ik_validated": real_panda and ik_failures == 0,
         "panda_ik_failures": ik_failures,
@@ -651,24 +810,37 @@ def run(
             "interpretation": "pipeline effect is measured on transit + transfer XY segments",
         },
     }
-    _write_json(output / "final_plan.json", {
-        "success": success, "all_objects_solved": all_objects_solved,
-        "completion_ratio": completion_ratio, "actions": plan_actions,
-    })
+    _write_json(
+        output / "final_plan.json",
+        {
+            "success": success,
+            "all_objects_solved": all_objects_solved,
+            "completion_ratio": completion_ratio,
+            "actions": plan_actions,
+        },
+    )
     _write_json(output / "metrics.json", metrics)
     _write_json(output / "challenge_ablation.json", metrics["challenge_ablation"])
-    _write_json(output / "scene_summary.json", {
-        "scene_id": config["scene"]["scene_id"], "objects": list(objects),
-        "slots": {oid: {"name": s.name, "position": s.position} for oid, s in slots.items()},
-        "obstacles": config["obstacles"], "robot_model_status": builder.panda_asset.status,
-    })
-    observation = f"""# Observation: {config['scene']['scene_id']}
+    _write_json(
+        output / "scene_summary.json",
+        {
+            "scene_id": config["scene"]["scene_id"],
+            "objects": list(objects),
+            "slots": {
+                oid: {"name": s.name, "position": s.position}
+                for oid, s in slots.items()
+            },
+            "obstacles": config["obstacles"],
+            "robot_model_status": builder.panda_asset.status,
+        },
+    )
+    observation = f"""# Observation: {config["scene"]["scene_id"]}
 
 1. **Before integration:** No. The existing code had no MuJoCo backend or scene loader, and its exhaustive symbolic planner is intractable for 12 objects (`12! * 2^12` branches).
 2. **After integration:** Partial. The ordered CTAMP adapter found a symbolic/geometric plan for all {len(objects)} objects and synchronized final cube poses into a stepped MuJoCo scene.
-3. **Robot model:** `{builder.panda_asset.status}`. Seven-joint Panda IK and joint-space collision paths were {'validated' if real_panda and ik_failures == 0 else 'not fully validated'}.
+3. **Robot model:** `{builder.panda_asset.status}`. Seven-joint Panda IK and joint-space collision paths were {"validated" if real_panda and ik_failures == 0 else "not fully validated"}.
 4. **Wall behavior:** The inflated wall blocked {direct_only_failures} of {len(objects) * 2} direct transit/transfer segments.
-5. **Side corridors:** The obstacle-aware pipeline used {aware_corridor_routes} corridor routes and left {sum(not x['success'] for x in per_object)} objects unresolved.
+5. **Side corridors:** The obstacle-aware pipeline used {aware_corridor_routes} corridor routes and left {sum(not x["success"] for x in per_object)} objects unresolved.
 6. **Slots:** All {len(slots)} cubes received ordered, color-correct, table-valid slots.
 7. **Reach:** All object starts and slots satisfy configured radial reach limits.
 8. **Impossible objects:** None under the 2-D probe. Full physical feasibility remains unknown because Panda IK and joint/link collision checking are absent.
@@ -678,9 +850,9 @@ def run(
 ## Evidence classification
 
 - Symbolic CTAMP success: **yes (deterministic ordered branch)**
-- Geometric 2-D probe success: **{'yes' if success else 'no'}**
+- Geometric 2-D probe success: **{"yes" if success else "no"}**
 - MuJoCo scene load/step/state update: **yes**
-- Full MuJoCo Panda joint/IK motion success: **{'yes' if real_panda and ik_failures == 0 else 'no'}**
+- Full MuJoCo Panda joint/IK motion success: **{"yes" if real_panda and ik_failures == 0 else "no"}**
 - Force-closure finger grasp/contact dynamics: **no; cubes are attached kinematically during transfer**
 """
     (output / "OBSERVATION.md").write_text(observation, encoding="utf-8")
@@ -700,8 +872,13 @@ def main() -> int:
     parser.add_argument("--viewer", action="store_true")
     parser.add_argument("--max-objects", type=int)
     args = parser.parse_args()
-    metrics = run(args.config, args.output, args.max_retries_per_object,
-                  max_objects=args.max_objects, viewer=args.viewer)
+    metrics = run(
+        args.config,
+        args.output,
+        args.max_retries_per_object,
+        max_objects=args.max_objects,
+        viewer=args.viewer,
+    )
     sys.stdout.write(json.dumps(metrics, indent=2) + "\n")
     return 0 if metrics["solution_found"] else 2
 
