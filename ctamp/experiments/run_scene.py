@@ -8,6 +8,7 @@ import math
 import sys
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -26,8 +27,86 @@ from ..simulation import (
 from ..tmm.multigraph import TaskMotionMultigraph
 
 
+@dataclass
+class _ObjectExecution:
+    ik_success: bool = True
+    ik_reason: str | None = None
+    transit_joint_waypoints: list[list[float]] = field(default_factory=list)
+    transfer_joint_waypoints: list[list[float]] = field(default_factory=list)
+    grasp_style: str | None = None
+    physical_grip_success: bool | None = None
+    physical_tidy_success: bool | None = None
+    physical_stage: str | None = None
+    physical_lift_height: float | None = None
+    placement_error: list[float] | None = None
+
+
 def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def _route_type(motion: object) -> str:
+    return motion.metadata["route_type"]
+
+
+def _plan_action(
+    object_id: str,
+    slot: object,
+    route: str,
+    transit: object,
+    motion: object,
+    execution: _ObjectExecution,
+    grip_width: float,
+) -> dict:
+    return {
+        "object_id": object_id,
+        "slot": slot.name,
+        "route_type": route,
+        "transit_route_type": _route_type(transit),
+        "transit_waypoints": transit.waypoints,
+        "transfer_waypoints": motion.waypoints,
+        "transit_joint_waypoints": execution.transit_joint_waypoints,
+        "transfer_joint_waypoints": execution.transfer_joint_waypoints,
+        "waypoints": motion.waypoints,
+        "z": slot.position[2],
+        "grasp_width": grip_width,
+    }
+
+
+def _per_object_result(
+    object_id: str,
+    slot: object,
+    object_success: bool,
+    route: str,
+    retries: int,
+    reason: str | None,
+    transit: object,
+    reach: float,
+    motion: object,
+    reach_ok: bool,
+    execution: _ObjectExecution,
+) -> dict:
+    return {
+        "object_id": object_id,
+        "slot": slot.name,
+        "success": object_success,
+        "route_type": route,
+        "retries_used": retries,
+        "reason": reason,
+        "transit_route_type": _route_type(transit),
+        "transit_length": transit.length,
+        "ik_success": execution.ik_success,
+        "ik_reason": execution.ik_reason,
+        "grasp_style": execution.grasp_style,
+        "start_reach": reach,
+        "motion_length": motion.length,
+        "reach_ok": reach_ok,
+        "physical_stage": execution.physical_stage,
+        "physical_grip_success": execution.physical_grip_success,
+        "physical_tidy_success": execution.physical_tidy_success,
+        "physical_lift_height": execution.physical_lift_height,
+        "placement_error": execution.placement_error,
+    }
 
 
 def _build_ordered_tmm(object_ids: list[str], motions: dict[str, object]) -> TaskMotionMultigraph:
@@ -220,6 +299,135 @@ def run(
         )
         return returned_home
 
+    def _execute_physical_pick_place(
+        object_id: str,
+        obj: dict,
+        slot: object,
+        arm_at_home: bool,
+    ) -> _ObjectExecution:
+        nonlocal physical_qpos
+        execution = _ObjectExecution()
+        tracking_error = 0.0
+        object_pose = backend.get_body_pose(f"cube_{object_id}")[:3]
+        ik_solver.set_qpos(physical_qpos)
+        grasp = ik_solver.plan_physical_grasp(
+            object_id, tuple(object_pose), start_qpos=physical_qpos,
+        )
+        if not grasp.success and arm_at_home and physical_home_qpos is not None:
+            ik_solver.set_qpos(physical_home_qpos)
+            grasp = ik_solver.plan_physical_grasp(
+                object_id, tuple(object_pose), start_qpos=physical_home_qpos,
+                random_restarts=192,
+            )
+        execution.ik_success = grasp.success
+        execution.grasp_style = grasp.grasp_style
+        execution.ik_reason = grasp.reason
+
+        if execution.ik_success:
+            approach_q = np.asarray(grasp.joint_waypoints[-1])
+            ik_solver.set_qpos(approach_q)
+            grasp_rotation = ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
+            lift = ik_solver.solve(
+                ik_solver.site_position() + np.array([0.0, 0.0, 0.14]),
+                seed=approach_q, orientation=grasp_rotation,
+                orientation_tolerance=0.10,
+            )
+            execution.ik_success = lift.success
+            execution.ik_reason = None if lift.success else "lift IK failed"
+
+        if execution.ik_success:
+            ik_solver.set_qpos(lift.qpos)
+            place_target = np.asarray(slot.position) + np.array([0.0, 0.0, 0.06])
+            preplace_target = place_target + np.array([0.0, 0.0, 0.14])
+            place_path = ik_solver.solve_path(
+                [tuple(preplace_target), tuple(place_target)],
+                orientation=grasp_rotation,
+                allowed_object_id=object_id,
+            )
+            if not place_path.success:
+                ik_solver.set_qpos(lift.qpos)
+                place_path = ik_solver.solve_path(
+                    [tuple(preplace_target), tuple(place_target)],
+                    allowed_object_id=object_id,
+                )
+            execution.ik_success = place_path.success
+            execution.ik_reason = place_path.reason
+
+        if execution.ik_success:
+            execution.transit_joint_waypoints = [list(q) for q in grasp.joint_waypoints]
+            execution.transfer_joint_waypoints = [list(lift.qpos)] + [
+                list(q) for q in place_path.joint_waypoints[1:]
+            ]
+            physics_executor.open_gripper(steps=120)
+            execution.physical_stage = "pregrasp_tracking"
+            tracked, tracking_error = physics_executor.follow_joint_path(
+                grasp.joint_waypoints[1:-1],
+            )
+            execution.ik_success = tracked
+            execution.ik_reason = None if tracked else "pregrasp tracking failed"
+
+        if execution.ik_success:
+            execution.physical_stage = "physical_grasp"
+            grasp_result = physics_executor.validate_grasp_and_lift(
+                object_id, approach_q, lift.qpos,
+                grasp_site_target=np.asarray(object_pose) + np.array([0.0, 0.0, 0.02]),
+                grip_width=_grip_width(obj),
+            )
+            execution.physical_grip_success = grasp_result.success
+            execution.physical_lift_height = grasp_result.lift_height
+            execution.ik_success = grasp_result.success
+            execution.ik_reason = grasp_result.reason
+            tracking_error = max(tracking_error, grasp_result.arm_tracking_error)
+
+        if execution.ik_success:
+            execution.physical_stage = "place_tracking"
+            tracked, place_error = physics_executor.follow_joint_path(
+                place_path.joint_waypoints[1:],
+            )
+            tracking_error = max(tracking_error, place_error)
+            execution.ik_success = tracked
+            execution.ik_reason = None if tracked else "place tracking failed"
+
+        if execution.ik_success:
+            physics_executor.set_carry_constraint(object_id, False)
+            physics_executor.settle(steps=60)
+            physics_executor.open_gripper(steps=320)
+            physics_executor.settle(steps=100)
+            if len(place_path.joint_waypoints) >= 2:
+                physics_executor.follow_joint_path(
+                    [place_path.joint_waypoints[-2]], max_joint_step=0.018,
+                )
+            reverse_to_lift = list(reversed(place_path.joint_waypoints[:-2]))
+            reverse_to_home = list(reversed(grasp.joint_waypoints[:-1]))
+            if reverse_to_lift or reverse_to_home:
+                physics_executor.follow_joint_path(
+                    [*reverse_to_lift, *reverse_to_home], max_joint_step=0.025,
+                )
+            physics_executor.settle(steps=180)
+            final_position = backend.get_body_pose(f"cube_{object_id}")[:3]
+            execution.placement_error = (
+                np.asarray(final_position) - np.asarray(slot.position)
+            ).tolist()
+            execution.physical_tidy_success = (
+                float(np.linalg.norm(execution.placement_error[:2])) <= 0.07
+            )
+            execution.ik_success = execution.physical_tidy_success
+            execution.ik_reason = None if execution.physical_tidy_success else "cube missed tidy slot"
+        elif execution.physical_grip_success:
+            physics_executor.set_carry_constraint(object_id, False)
+            physics_executor.open_gripper(steps=250)
+            physics_executor.settle(steps=120)
+
+        if execution.physical_grip_success is None:
+            execution.physical_grip_success = False
+        if execution.physical_tidy_success is None:
+            execution.physical_tidy_success = False
+        if execution.physical_stage is not None and physical_home_qpos is not None:
+            _move_arm_to_safe_pose()
+        physical_qpos = physics_executor.ik.current_qpos()
+        ik_solver.set_qpos(physical_qpos)
+        return execution
+
     target_objects = list(config["task"]["target_objects"])
     if max_objects is not None:
         target_objects = target_objects[:max_objects]
@@ -300,164 +508,47 @@ def run(
             collision_failures += 1
         retries = max(0, attempts - 1)
         retries_used += retries
-        route = motion.metadata["route_type"]
+        route = _route_type(motion)
         motions[object_id] = motion
         aware_corridor_routes += int(route != "direct")
-        transit_joint_waypoints: list[list[float]] = []
-        transfer_joint_waypoints: list[list[float]] = []
-        ik_success = True
-        ik_reason = None
-        grasp_style = None
-        physical_grip_success = None
-        physical_tidy_success = None
-        physical_stage = None
-        physical_lift_height = None
-        placement_error = None
+        execution = _ObjectExecution()
         reach_ok = bool(obj.get("reachable", True)) and (
             float(config["robot"]["reach_min_xy"]) <= reach <= float(config["robot"]["reach_max_xy"])
         )
         if ik_solver is not None:
             if not reach_ok:
-                ik_success = False
-                ik_reason = "object outside configured reach"
+                execution.ik_success = False
+                execution.ik_reason = "object outside configured reach"
             elif ik_home is None or not ik_home.success:
-                ik_success = False
-                ik_reason = "no collision-free Panda home IK"
+                execution.ik_success = False
+                execution.ik_reason = "no collision-free Panda home IK"
             elif physics_executor is not None and physical_qpos is not None:
-                object_pose = backend.get_body_pose(f"cube_{object_id}")[:3]
-                ik_solver.set_qpos(physical_qpos)
-                grasp = ik_solver.plan_physical_grasp(
-                    object_id, tuple(object_pose), start_qpos=physical_qpos,
-                )
-                if not grasp.success and arm_at_home and physical_home_qpos is not None:
-                    ik_solver.set_qpos(physical_home_qpos)
-                    grasp = ik_solver.plan_physical_grasp(
-                        object_id, tuple(object_pose), start_qpos=physical_home_qpos,
-                        random_restarts=192,
-                    )
-                ik_success = grasp.success
-                grasp_style = grasp.grasp_style
-                ik_reason = grasp.reason
-                if ik_success:
-                    approach_q = np.asarray(grasp.joint_waypoints[-1])
-                    ik_solver.set_qpos(approach_q)
-                    grasp_rotation = ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
-                    lift = ik_solver.solve(
-                        ik_solver.site_position() + np.array([0.0, 0.0, 0.14]),
-                        seed=approach_q, orientation=grasp_rotation,
-                        orientation_tolerance=0.10,
-                    )
-                    ik_success = lift.success
-                    ik_reason = None if lift.success else "lift IK failed"
-                if ik_success:
-                    ik_solver.set_qpos(lift.qpos)
-                    place_target = np.asarray(slot.position) + np.array([0.0, 0.0, 0.06])
-                    preplace_target = place_target + np.array([0.0, 0.0, 0.14])
-                    place_path = ik_solver.solve_path(
-                        [tuple(preplace_target), tuple(place_target)],
-                        orientation=grasp_rotation,
-                        allowed_object_id=object_id,
-                    )
-                    if not place_path.success:
-                        ik_solver.set_qpos(lift.qpos)
-                        place_path = ik_solver.solve_path(
-                            [tuple(preplace_target), tuple(place_target)],
-                            allowed_object_id=object_id,
-                        )
-                    ik_success = place_path.success
-                    ik_reason = place_path.reason
-                if ik_success:
-                    transit_joint_waypoints = [list(q) for q in grasp.joint_waypoints]
-                    transfer_joint_waypoints = [list(lift.qpos)] + [
-                        list(q) for q in place_path.joint_waypoints[1:]
-                    ]
-                    physics_executor.open_gripper(steps=120)
-                    physical_stage = "pregrasp_tracking"
-                    tracked, tracking_error = physics_executor.follow_joint_path(
-                        grasp.joint_waypoints[1:-1],
-                    )
-                    ik_success = tracked
-                    ik_reason = None if tracked else "pregrasp tracking failed"
-                if ik_success:
-                    physical_stage = "physical_grasp"
-                    grasp_result = physics_executor.validate_grasp_and_lift(
-                        object_id, approach_q, lift.qpos,
-                        grasp_site_target=np.asarray(object_pose) + np.array([0.0, 0.0, 0.02]),
-                        grip_width=_grip_width(obj),
-                    )
-                    physical_grip_success = grasp_result.success
-                    physical_lift_height = grasp_result.lift_height
-                    ik_success = grasp_result.success
-                    ik_reason = grasp_result.reason
-                    tracking_error = max(tracking_error, grasp_result.arm_tracking_error)
-                if ik_success:
-                    physical_stage = "place_tracking"
-                    tracked, place_error = physics_executor.follow_joint_path(
-                        place_path.joint_waypoints[1:],
-                    )
-                    tracking_error = max(tracking_error, place_error)
-                    ik_success = tracked
-                    ik_reason = None if tracked else "place tracking failed"
-                if ik_success:
-                    physics_executor.set_carry_constraint(object_id, False)
-                    physics_executor.settle(steps=60)
-                    physics_executor.open_gripper(steps=320)
-                    physics_executor.settle(steps=100)
-                    if len(place_path.joint_waypoints) >= 2:
-                        physics_executor.follow_joint_path(
-                            [place_path.joint_waypoints[-2]], max_joint_step=0.018,
-                        )
-                    reverse_to_lift = list(reversed(place_path.joint_waypoints[:-2]))
-                    reverse_to_home = list(reversed(grasp.joint_waypoints[:-1]))
-                    if reverse_to_lift or reverse_to_home:
-                        physics_executor.follow_joint_path(
-                            [*reverse_to_lift, *reverse_to_home], max_joint_step=0.025,
-                        )
-                    physics_executor.settle(steps=180)
-                    final_position = backend.get_body_pose(f"cube_{object_id}")[:3]
-                    placement_error = (
-                        np.asarray(final_position) - np.asarray(slot.position)
-                    ).tolist()
-                    physical_tidy_success = float(np.linalg.norm(placement_error[:2])) <= 0.07
-                    ik_success = physical_tidy_success
-                    ik_reason = None if physical_tidy_success else "cube missed tidy slot"
-                elif physical_grip_success:
-                    physics_executor.set_carry_constraint(object_id, False)
-                    physics_executor.open_gripper(steps=250)
-                    physics_executor.settle(steps=120)
-                if physical_grip_success is None:
-                    physical_grip_success = False
-                if physical_tidy_success is None:
-                    physical_tidy_success = False
-                if physical_stage is not None and physical_home_qpos is not None:
-                    _move_arm_to_safe_pose()
-                physical_qpos = physics_executor.ik.current_qpos()
-                ik_solver.set_qpos(physical_qpos)
+                execution = _execute_physical_pick_place(object_id, obj, slot, arm_at_home)
             else:
                 transit_targets = _dense_xyz(transit.waypoints, 0.95)[1:]
                 transit_ik = ik_solver.solve_path(transit_targets)
-                ik_success = transit_ik.success
-                transit_joint_waypoints = [list(q) for q in transit_ik.joint_waypoints]
-                ik_reason = transit_ik.reason
+                execution.ik_success = transit_ik.success
+                execution.transit_joint_waypoints = [list(q) for q in transit_ik.joint_waypoints]
+                execution.ik_reason = transit_ik.reason
                 if not transit_ik.success and transit_ik.collision_pairs:
                     ik_collision_failures += 1
-                if ik_success:
+                if execution.ik_success:
                     grasp = ik_solver.plan_grasp_candidates(
                         tuple(obj["pose"]), start_qpos=transit_ik.joint_waypoints[-1],
                         random_restarts=48,
                     )
-                    ik_success = grasp.success
-                    grasp_style = grasp.grasp_style
-                    ik_reason = grasp.reason
+                    execution.ik_success = grasp.success
+                    execution.grasp_style = grasp.grasp_style
+                    execution.ik_reason = grasp.reason
                     if grasp.success:
-                        transit_joint_waypoints.extend(
+                        execution.transit_joint_waypoints.extend(
                             list(q) for q in grasp.joint_waypoints[1:]
                         )
                         ik_solver.set_qpos(grasp.joint_waypoints[-1])
                         adaptive_grasp_orientation = (
                             ik_solver.data.site_xmat[ik_solver.site_id].reshape(3, 3).copy()
                         )
-                if ik_success:
+                if execution.ik_success:
                     approaches = {
                         "top": (0.0, 0.0, -1.0),
                         "side_pos_x": (-1.0, 0.0, 0.0),
@@ -467,68 +558,51 @@ def run(
                     }
                     grasp_orientation = (
                         adaptive_grasp_orientation
-                        if grasp_style == "adaptive_oblique"
-                        else ik_solver._rotation_from_approach(approaches[grasp_style])
-                        if grasp_style in approaches
+                        if execution.grasp_style == "adaptive_oblique"
+                        else ik_solver._rotation_from_approach(approaches[execution.grasp_style])
+                        if execution.grasp_style in approaches
                         else None
                     )
                     transfer_targets = _dense_xyz(motion.waypoints, 0.938)[1:]
                     transfer_ik = ik_solver.solve_path(
                         transfer_targets, orientation=grasp_orientation,
                     )
-                    if not transfer_ik.success and grasp_style.startswith("adaptive_"):
+                    if not transfer_ik.success and (execution.grasp_style or "").startswith("adaptive_"):
                         ik_solver.set_qpos(grasp.joint_waypoints[-1])
                         transfer_ik = ik_solver.solve_path(transfer_targets)
                         if transfer_ik.success:
-                            grasp_style = f"{grasp_style}_adaptive_transport"
-                    ik_success = transfer_ik.success
-                    transfer_joint_waypoints = [list(grasp.joint_waypoints[-1])] + [
+                            execution.grasp_style = f"{execution.grasp_style}_adaptive_transport"
+                    execution.ik_success = transfer_ik.success
+                    execution.transfer_joint_waypoints = [list(grasp.joint_waypoints[-1])] + [
                         list(q) for q in transfer_ik.joint_waypoints[1:]
                     ]
-                    ik_reason = transfer_ik.reason
+                    execution.ik_reason = transfer_ik.reason
                     if not transfer_ik.success and transfer_ik.collision_pairs:
                         ik_collision_failures += 1
-            if not ik_success:
+            if not execution.ik_success:
                 ik_failures += 1
                 ik_solver.set_qpos(object_start_q)
-        grasp_styles[object_id] = grasp_style
+        grasp_styles[object_id] = execution.grasp_style
         reason = motion.metadata.get("reason")
         object_success = (
-            ik_success if physics_executor is not None
-            else transit.success and motion.success and ik_success
+            execution.ik_success if physics_executor is not None
+            else transit.success and motion.success and execution.ik_success
         )
         if object_success:
             total_cost += transit.length + motion.length
             if physics_executor is None:
                 backend.set_body_pose(f"cube_{object_id}", slot.position)
-            plan_actions.append({"object_id": object_id, "slot": slot.name,
-                                 "route_type": route,
-                                 "transit_route_type": transit.metadata["route_type"],
-                                 "transit_waypoints": transit.waypoints,
-                                  "transfer_waypoints": motion.waypoints,
-                                  "transit_joint_waypoints": transit_joint_waypoints,
-                                   "transfer_joint_waypoints": transfer_joint_waypoints,
-                                   "waypoints": motion.waypoints, "z": slot.position[2],
-                                   "grasp_width": _grip_width(obj)})
-        per_object.append({
-            "object_id": object_id, "slot": slot.name, "success": object_success,
-            "route_type": route, "retries_used": retries, "reason": reason,
-            "transit_route_type": transit.metadata["route_type"],
-            "transit_length": transit.length,
-            "ik_success": ik_success, "ik_reason": ik_reason,
-            "grasp_style": grasp_style,
-            "start_reach": reach, "motion_length": motion.length,
-            "reach_ok": reach_ok,
-            "physical_stage": physical_stage,
-            "physical_grip_success": physical_grip_success,
-            "physical_tidy_success": physical_tidy_success,
-            "physical_lift_height": physical_lift_height,
-            "placement_error": placement_error,
-        })
+            plan_actions.append(_plan_action(
+                object_id, slot, route, transit, motion, execution, _grip_width(obj),
+            ))
+        per_object.append(_per_object_result(
+            object_id, slot, object_success, route, retries, reason,
+            transit, reach, motion, reach_ok, execution,
+        ))
         sys.stderr.write(
             f"[{len(per_object)}/{len(target_objects)}] {object_id}: "
-            f"geometric={transit.success and motion.success} ik={ik_success} "
-            f"reason={ik_reason}\n",
+            f"geometric={transit.success and motion.success} ik={execution.ik_success} "
+            f"reason={execution.ik_reason}\n",
         )
         if object_success:
             current_xy = slot.position[:2]
