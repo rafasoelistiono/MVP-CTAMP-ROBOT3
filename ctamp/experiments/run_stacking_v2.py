@@ -1,4 +1,4 @@
-"""Two-phase stacking scenario for CTAMP v2."""
+"""Continuous stacking scenario for CTAMP v2."""
 
 from __future__ import annotations
 
@@ -11,9 +11,15 @@ import yaml
 
 from .run_scene_v2 import run as run_scene_v2
 
+STACKING_STRATEGY = "continuous_single_viewer_stack_with_safe_zone_preview"
+
 
 def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_yaml(path: Path, value: object) -> None:
+    path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
 
 
 def _object_sizes(config: dict[str, Any]) -> dict[str, tuple[float, float, float]]:
@@ -60,6 +66,19 @@ def _safe_zone_positions(
     return positions
 
 
+def _limited_orders(stack: dict[str, Any], max_objects: int | None) -> tuple[list[str], list[str]]:
+    safe_zone_order = list(stack.get(
+        "safe_zone_order_right_first", stack["placeholder_order_small_to_large"],
+    ))
+    final_order = list(stack["final_order_bottom_to_top"])
+    if max_objects is None:
+        return safe_zone_order, final_order
+
+    safe_zone_order = safe_zone_order[:max_objects]
+    selected = set(safe_zone_order)
+    return safe_zone_order, [object_id for object_id in final_order if object_id in selected]
+
+
 def _phase_config(
     base: dict[str, Any],
     phase_name: str,
@@ -77,7 +96,10 @@ def _phase_config(
         "color": "mixed",
         "objects": target_order,
         "center": target_positions[target_order[0]],
-        "positions": {object_id: target_positions[object_id] for object_id in target_order},
+        "positions": {
+            object_id: target_positions[object_id]
+            for object_id in target_order
+        },
     }]
     if object_poses is not None:
         for obj in config["objects"]:
@@ -89,14 +111,7 @@ def _phase_config(
 def build_phase_configs(config: dict[str, Any], max_objects: int | None = None) -> tuple[dict, dict, dict]:
     stack = config["stacking_v2"]
     sizes = _object_sizes(config)
-    safe_zone_order = list(stack.get(
-        "safe_zone_order_right_first", stack["placeholder_order_small_to_large"],
-    ))
-    final_order = list(stack["final_order_bottom_to_top"])
-    if max_objects is not None:
-        safe_zone_order = safe_zone_order[:max_objects]
-        final_order = [object_id for object_id in final_order if object_id in set(safe_zone_order)]
-
+    safe_zone_order, final_order = _limited_orders(stack, max_objects)
     table_z = float(config["table"]["z_top"])
     safe_zone_positions = _safe_zone_positions(
         safe_zone_order,
@@ -120,6 +135,36 @@ def build_phase_configs(config: dict[str, Any], max_objects: int | None = None) 
     return phase1, phase2, summary
 
 
+def _write_preview_configs(output: Path, safe_zone_config: dict, stack_config: dict) -> Path:
+    _write_yaml(output / "safe_zone_preview.yaml", safe_zone_config)
+    stack_path = output / "continuous_stack.yaml"
+    _write_yaml(stack_path, stack_config)
+    return stack_path
+
+
+def _dry_run_metrics(summary: dict) -> dict:
+    return {
+        "ctamp_version": "v2",
+        "task": "stack",
+        "strategy": STACKING_STRATEGY,
+        "dry_run": True,
+        **summary,
+    }
+
+
+def _run_metrics(continuous: dict, stack_config: dict, summary: dict) -> dict:
+    return {
+        "ctamp_version": "v2",
+        "task": "stack",
+        "strategy": STACKING_STRATEGY,
+        "solution_found": continuous["solution_found"],
+        "completed_objects": continuous["completed_objects"],
+        "target_objects": len(stack_config["task"]["target_objects"]),
+        "continuous_stack": continuous,
+        **summary,
+    }
+
+
 def run(
     config_path: Path,
     output: Path,
@@ -131,41 +176,23 @@ def run(
 ) -> dict:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     output.mkdir(parents=True, exist_ok=True)
-    phase1, phase2, summary = build_phase_configs(config, max_objects=max_objects)
-    phase1_path = output / "safe_zone_preview.yaml"
-    phase2_path = output / "continuous_stack.yaml"
-    phase1_path.write_text(yaml.safe_dump(phase1, sort_keys=False), encoding="utf-8")
-    phase2_path.write_text(yaml.safe_dump(phase2, sort_keys=False), encoding="utf-8")
+    safe_zone_config, stack_config, summary = build_phase_configs(config, max_objects=max_objects)
+    stack_path = _write_preview_configs(output, safe_zone_config, stack_config)
     _write_json(output / "stacking_plan.json", summary)
 
     if dry_run:
-        metrics = {
-            "ctamp_version": "v2",
-            "task": "stack",
-            "strategy": "continuous_single_viewer_stack_with_safe_zone_preview",
-            "dry_run": True,
-            **summary,
-        }
+        metrics = _dry_run_metrics(summary)
         _write_json(output / "metrics.json", metrics)
         return metrics
 
     continuous = run_scene_v2(
-        phase2_path,
+        stack_path,
         output / "continuous_stack",
         max_retries=max_retries,
         max_objects=max_objects,
         project_root=project_root,
         viewer=viewer,
     )
-    metrics = {
-        "ctamp_version": "v2",
-        "task": "stack",
-        "strategy": "continuous_single_viewer_stack_with_safe_zone_preview",
-        "solution_found": continuous["solution_found"],
-        "completed_objects": continuous["completed_objects"],
-        "target_objects": len(phase2["task"]["target_objects"]),
-        "continuous_stack": continuous,
-        **summary,
-    }
+    metrics = _run_metrics(continuous, stack_config, summary)
     _write_json(output / "metrics.json", metrics)
     return metrics

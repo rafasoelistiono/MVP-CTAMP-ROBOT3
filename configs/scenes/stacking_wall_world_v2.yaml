@@ -18,12 +18,12 @@ robot:
   physical_start_qpos: [-1.251489, 1.391494, 1.007269, -1.429392, -1.832880, 2.695749, 2.102807]
   capabilities: [pick, place]
 objects:
-  - {id: c1, class: cube, color: purple, size_xyz: [0.066, 0.066, 0.066], pose: [-0.0500, -0.5800, 0.833], reachable: true, near_obstacle: false}
-  - {id: c2, class: cube, color: blue, size_xyz: [0.069, 0.069, 0.069], pose: [0.1066, -0.4125, 0.8345], reachable: true, near_obstacle: false}
-  - {id: c3, class: cube, color: green, size_xyz: [0.072, 0.072, 0.072], pose: [0.1347, -0.4988, 0.836], reachable: true, near_obstacle: false}
-  - {id: c4, class: cube, color: yellow, size_xyz: [0.075, 0.075, 0.075], pose: [0.2300, -0.3261, 0.8375], reachable: true, near_obstacle: false}
-  - {id: c5, class: cube, color: orange, size_xyz: [0.078, 0.078, 0.078], pose: [0.0200, 0.4500, 0.839], reachable: true, near_obstacle: false}
-  - {id: c6, class: cube, color: red, size_xyz: [0.081, 0.081, 0.081], pose: [0.1090, 0.3708, 0.8405], reachable: true, near_obstacle: false}
+  - {id: c1, class: cube, color: purple, size_xyz: [0.058, 0.058, 0.058], grip_target_width: 0.044, pose: [-0.0500, -0.5800, 0.829], reachable: true, near_obstacle: false}
+  - {id: c2, class: cube, color: blue, size_xyz: [0.066, 0.066, 0.066], grip_target_width: 0.052, pose: [0.1066, -0.4125, 0.833], reachable: true, near_obstacle: false}
+  - {id: c3, class: cube, color: green, size_xyz: [0.074, 0.074, 0.074], grip_target_width: 0.060, pose: [0.1347, -0.4988, 0.837], reachable: true, near_obstacle: false}
+  - {id: c4, class: cube, color: yellow, size_xyz: [0.082, 0.082, 0.082], grip_target_width: 0.066, pose: [0.2300, -0.3261, 0.841], reachable: true, near_obstacle: false}
+  - {id: c5, class: cube, color: orange, size_xyz: [0.090, 0.090, 0.090], grip_target_width: 0.072, pose: [0.0200, 0.4500, 0.845], reachable: true, near_obstacle: false}
+  - {id: c6, class: cube, color: red, size_xyz: [0.098, 0.098, 0.098], grip_target_width: 0.078, pose: [0.1090, 0.3708, 0.849], reachable: true, near_obstacle: false}
 obstacles:
   - id: frontal_tall_wall
     kind: wall

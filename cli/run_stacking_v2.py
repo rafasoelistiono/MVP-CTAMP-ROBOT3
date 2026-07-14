@@ -14,7 +14,7 @@ DEFAULT_CONFIG = ROOT_DIR / "configs/scenes/stacking_wall_world_v2.yaml"
 
 
 def _arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run CTAMP v2 two-phase cube stacking.")
+    parser = argparse.ArgumentParser(description="Run CTAMP v2 continuous cube stacking.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--log-dir", default=ROOT_DIR / "runs", type=Path)

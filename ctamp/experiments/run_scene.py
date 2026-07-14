@@ -138,6 +138,7 @@ def run(
     retry_limit = (int(max_retries) if max_retries is not None
                    else int(config["constraints"]["max_retries_per_object"]))
     objects = {obj["id"]: obj for obj in config["objects"]}
+    preserve_order = bool(config.get("task", {}).get("preserve_order"))
     per_object = []
     plan_actions = []
     collision_failures = 0
@@ -160,6 +161,13 @@ def run(
     ik_failures = 0
     ik_collision_failures = 0
     grasp_styles: dict[str, str | None] = {}
+
+    def _grip_width(obj: dict) -> float:
+        return float(obj.get(
+            "grip_target_width",
+            config.get("physical_execution", {}).get("grip_target_width", 0.052),
+        ))
+
     if ik_solver is not None:
         ik_home = ik_solver.solve_collision_free(
             (home_xy[0], home_xy[1], 0.95), random_restarts=128,
@@ -217,7 +225,7 @@ def run(
         target_objects = target_objects[:max_objects]
 
     def _next_object(pending: list[str]) -> str:
-        if config.get("task", {}).get("preserve_order"):
+        if preserve_order:
             return pending[0]
         original_rank = {object_id: index for index, object_id in enumerate(target_objects)}
 
@@ -375,9 +383,7 @@ def run(
                     grasp_result = physics_executor.validate_grasp_and_lift(
                         object_id, approach_q, lift.qpos,
                         grasp_site_target=np.asarray(object_pose) + np.array([0.0, 0.0, 0.02]),
-                        grip_width=float(
-                            config.get("physical_execution", {}).get("grip_target_width", 0.052),
-                        ),
+                        grip_width=_grip_width(obj),
                     )
                     physical_grip_success = grasp_result.success
                     physical_lift_height = grasp_result.lift_height
@@ -501,11 +507,9 @@ def run(
                                  "transit_waypoints": transit.waypoints,
                                   "transfer_waypoints": motion.waypoints,
                                   "transit_joint_waypoints": transit_joint_waypoints,
-                                  "transfer_joint_waypoints": transfer_joint_waypoints,
-                                  "waypoints": motion.waypoints, "z": slot.position[2],
-                                  "grasp_width": float(config.get(
-                                      "physical_execution", {},
-                                  ).get("grip_target_width", 0.052))})
+                                   "transfer_joint_waypoints": transfer_joint_waypoints,
+                                   "waypoints": motion.waypoints, "z": slot.position[2],
+                                   "grasp_width": _grip_width(obj)})
         per_object.append({
             "object_id": object_id, "slot": slot.name, "success": object_success,
             "route_type": route, "retries_used": retries, "reason": reason,
