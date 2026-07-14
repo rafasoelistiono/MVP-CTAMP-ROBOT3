@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..domain.models import Action, Edge, MotionPlan, ObjectState, Pose, RobotState, Shape, Vertex, WorkspaceState
+from ..domain.models import Edge, Pose, Vertex
 
 
 @dataclass
@@ -29,7 +29,9 @@ class PathFeatureExtractor:
     @property
     def feature_dim(self) -> int:
         c = self.config
-        geometric = c.max_joints + 1 + c.max_objects * 3 + c.max_objects * 4 + c.max_objects
+        geometric = (
+            c.max_joints + 1 + c.max_objects * 3 + c.max_objects * 4 + c.max_objects
+        )
         symbolic = 7
         return geometric + symbolic
 
@@ -42,7 +44,9 @@ class PathFeatureExtractor:
         features: List[float] = []
 
         robot = root_vertex.robot_state
-        joints = [robot.joint_values.get(f"j{i}", 0.0) for i in range(self.config.max_joints)]
+        joints = [
+            robot.joint_values.get(f"j{i}", 0.0) for i in range(self.config.max_joints)
+        ]
         features.extend(joints)
 
         arm_val = 0.5
@@ -53,7 +57,7 @@ class PathFeatureExtractor:
         features.append(arm_val)
 
         ws = root_vertex.workspace_state
-        obj_ids = sorted(ws.objects.keys())[:self.config.max_objects]
+        obj_ids = sorted(ws.objects.keys())[: self.config.max_objects]
         for oid in obj_ids:
             obj = ws.objects[oid]
             features.extend([obj.pose.x, obj.pose.y, obj.pose.theta])
@@ -62,12 +66,14 @@ class PathFeatureExtractor:
 
         for oid in obj_ids:
             obj = ws.objects[oid]
-            features.extend([
-                _hash_type(obj.shape.type),
-                obj.shape.width,
-                obj.shape.height,
-                obj.shape.radius,
-            ])
+            features.extend(
+                [
+                    _hash_type(obj.shape.type),
+                    obj.shape.width,
+                    obj.shape.height,
+                    obj.shape.radius,
+                ]
+            )
         for _ in range(self.config.max_objects - len(obj_ids)):
             features.extend([0.0, 0.0, 0.0, 0.0])
 
@@ -83,7 +89,9 @@ class PathFeatureExtractor:
         features.append(float(n))
 
         if n > 0:
-            transit_count = sum(1 for e in path_edges if e.action.action_type == "transit")
+            transit_count = sum(
+                1 for e in path_edges if e.action.action_type == "transit"
+            )
             transfer_count = n - transit_count
             left_count = sum(1 for e in path_edges if e.action.arm == "left")
             right_count = n - left_count
@@ -93,8 +101,14 @@ class PathFeatureExtractor:
             features.append(right_count / n)
             features.append(left_count / n)
 
-            transit_idx = [i for i, e in enumerate(path_edges) if e.action.action_type == "transit"]
-            transfer_idx = [i for i, e in enumerate(path_edges) if e.action.action_type == "transfer"]
+            transit_idx = [
+                i for i, e in enumerate(path_edges) if e.action.action_type == "transit"
+            ]
+            transfer_idx = [
+                i
+                for i, e in enumerate(path_edges)
+                if e.action.action_type == "transfer"
+            ]
             features.append(np.mean(transit_idx) / n if transit_idx else 0.0)
             features.append(np.mean(transfer_idx) / n if transfer_idx else 0.0)
         else:

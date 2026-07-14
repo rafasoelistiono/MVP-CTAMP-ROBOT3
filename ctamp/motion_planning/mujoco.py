@@ -19,8 +19,9 @@ class MuJoCoMotionPlanner:
 
     def plan_xy(self, start: Sequence[float], goal: Sequence[float]) -> MotionPlan:
         started = time.perf_counter()
-        result = self.probe.probe((float(start[0]), float(start[1])),
-                                  (float(goal[0]), float(goal[1])))
+        result = self.probe.probe(
+            (float(start[0]), float(start[1])), (float(goal[0]), float(goal[1]))
+        )
         return MotionPlan(
             success=result.success,
             waypoints=[list(p) for p in result.waypoints],
@@ -29,6 +30,9 @@ class MuJoCoMotionPlanner:
             clearance=result.clearance,
             planning_time=time.perf_counter() - started,
             iterations=max(1, len(result.waypoints) - 1),
-            metadata={"route_type": result.route_type, "reason": result.reason,
-                      "validation_level": "geometric_2d_probe"},
+            metadata={
+                "route_type": result.route_type,
+                "reason": result.reason,
+                "validation_level": "geometric_2d_probe",
+            },
         )

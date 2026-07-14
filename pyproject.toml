@@ -47,3 +47,6 @@ pythonpath = ["."]
 markers = [
   "simulation: headless MuJoCo, Pinocchio, and OMPL integration tests",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"ctamp/**/__init__.py" = ["E402", "F401"]

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple, FrozenSet, Callable, Any
+from typing import Dict, Optional, Tuple, FrozenSet, Callable
 
 from .types import Type, TypeHierarchy, Object, Constant
-from .predicates import Predicate, GroundPredicate, State, make_state
-from .operators import Operator, OperatorSchema, GroundAction, Action, ContinuousAction
+from .predicates import Predicate, GroundPredicate, State
+from .operators import Operator
 
 
 @dataclass

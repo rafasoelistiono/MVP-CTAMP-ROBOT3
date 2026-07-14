@@ -114,7 +114,9 @@ class Operator:
         subs = dict(zip([p.name for p in self.schema.parameters], objects))
 
         def _ground_pred(gp: GroundPredicate) -> GroundPredicate:
-            new_args = tuple(subs[a] if isinstance(a, str) and a in subs else a for a in gp.args)
+            new_args = tuple(
+                subs[a] if isinstance(a, str) and a in subs else a for a in gp.args
+            )
             return GroundPredicate(gp.predicate, new_args)
 
         pre = [_ground_pred(p) for p in self.preconditions]
@@ -167,7 +169,12 @@ class Domain:
         self.types[name] = t
         return t
 
-    def add_predicate(self, name: str, param_types: List[Type], pred_type: PredicateType = PredicateType.SYMBOLIC) -> Predicate:
+    def add_predicate(
+        self,
+        name: str,
+        param_types: List[Type],
+        pred_type: PredicateType = PredicateType.SYMBOLIC,
+    ) -> Predicate:
         pred = Predicate(name, tuple(param_types), pred_type)
         self.predicates[name] = pred
         return pred
@@ -220,51 +227,67 @@ def create_blocks_domain() -> Domain:
     holding = d.predicates["holding"]
     handempty = d.predicates["handempty"]
 
-    d.add_operator(Operator(
-        name="pickup",
-        schema=OperatorSchema([
-            Parameter("h", d.types["hand"]),
-            Parameter("b", d.types["block"]),
-        ]),
-        preconditions=[handempty("h"), clear("b"), ontable("b")],
-        add_effects=[holding("h", "b")],
-        del_effects=[handempty("h"), clear("b"), ontable("b")],
-    ))
+    d.add_operator(
+        Operator(
+            name="pickup",
+            schema=OperatorSchema(
+                [
+                    Parameter("h", d.types["hand"]),
+                    Parameter("b", d.types["block"]),
+                ]
+            ),
+            preconditions=[handempty("h"), clear("b"), ontable("b")],
+            add_effects=[holding("h", "b")],
+            del_effects=[handempty("h"), clear("b"), ontable("b")],
+        )
+    )
 
-    d.add_operator(Operator(
-        name="putdown",
-        schema=OperatorSchema([
-            Parameter("h", d.types["hand"]),
-            Parameter("b", d.types["block"]),
-        ]),
-        preconditions=[holding("h", "b")],
-        add_effects=[handempty("h"), clear("b"), ontable("b")],
-        del_effects=[holding("h", "b")],
-    ))
+    d.add_operator(
+        Operator(
+            name="putdown",
+            schema=OperatorSchema(
+                [
+                    Parameter("h", d.types["hand"]),
+                    Parameter("b", d.types["block"]),
+                ]
+            ),
+            preconditions=[holding("h", "b")],
+            add_effects=[handempty("h"), clear("b"), ontable("b")],
+            del_effects=[holding("h", "b")],
+        )
+    )
 
-    d.add_operator(Operator(
-        name="stack",
-        schema=OperatorSchema([
-            Parameter("h", d.types["hand"]),
-            Parameter("b1", d.types["block"]),
-            Parameter("b2", d.types["block"]),
-        ]),
-        preconditions=[holding("h", "b1"), clear("b2")],
-        add_effects=[handempty("h"), on("b1", "b2"), clear("b1")],
-        del_effects=[holding("h", "b1"), clear("b2")],
-    ))
+    d.add_operator(
+        Operator(
+            name="stack",
+            schema=OperatorSchema(
+                [
+                    Parameter("h", d.types["hand"]),
+                    Parameter("b1", d.types["block"]),
+                    Parameter("b2", d.types["block"]),
+                ]
+            ),
+            preconditions=[holding("h", "b1"), clear("b2")],
+            add_effects=[handempty("h"), on("b1", "b2"), clear("b1")],
+            del_effects=[holding("h", "b1"), clear("b2")],
+        )
+    )
 
-    d.add_operator(Operator(
-        name="unstack",
-        schema=OperatorSchema([
-            Parameter("h", d.types["hand"]),
-            Parameter("b1", d.types["block"]),
-            Parameter("b2", d.types["block"]),
-        ]),
-        preconditions=[on("b1", "b2"), clear("b1"), handempty("h")],
-        add_effects=[holding("h", "b1"), clear("b2")],
-        del_effects=[on("b1", "b2"), handempty("h"), clear("b1")],
-    ))
+    d.add_operator(
+        Operator(
+            name="unstack",
+            schema=OperatorSchema(
+                [
+                    Parameter("h", d.types["hand"]),
+                    Parameter("b1", d.types["block"]),
+                    Parameter("b2", d.types["block"]),
+                ]
+            ),
+            preconditions=[on("b1", "b2"), clear("b1"), handempty("h")],
+            add_effects=[holding("h", "b1"), clear("b2")],
+            del_effects=[on("b1", "b2"), handempty("h"), clear("b1")],
+        )
+    )
 
     return d
 

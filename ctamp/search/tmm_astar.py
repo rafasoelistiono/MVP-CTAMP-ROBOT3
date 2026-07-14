@@ -42,7 +42,9 @@ class SearchVisitor(ABC):
 
 
 class MockVisitor(SearchVisitor):
-    def __init__(self, planner: Optional[object] = None, workspace: Optional[object] = None) -> None:
+    def __init__(
+        self, planner: Optional[object] = None, workspace: Optional[object] = None
+    ) -> None:
         self.planner = planner
         self.workspace = workspace
         self.expanded: List[str] = []
@@ -135,9 +137,11 @@ class TMMAStar:
         while open_set:
             if time.time() - start_time > self.max_time:
                 return TMMSearchResult(
-                    success=False, nodes_expanded=nodes_expanded,
+                    success=False,
+                    nodes_expanded=nodes_expanded,
                     nodes_generated=nodes_generated,
-                    time_elapsed=time.time() - start_time, error="timeout",
+                    time_elapsed=time.time() - start_time,
+                    error="timeout",
                 )
 
             current = heapq.heappop(open_set)
@@ -147,17 +151,22 @@ class TMMAStar:
 
             if current.vertex_id in goal_ids:
                 return TMMSearchResult(
-                    success=True, goal_node=current,
-                    nodes_expanded=nodes_expanded, nodes_generated=nodes_generated,
-                    time_elapsed=time.time() - start_time, cost=current.g,
+                    success=True,
+                    goal_node=current,
+                    nodes_expanded=nodes_expanded,
+                    nodes_generated=nodes_generated,
+                    time_elapsed=time.time() - start_time,
+                    cost=current.g,
                 )
 
             nodes_expanded += 1
             if nodes_expanded >= self.max_nodes:
                 return TMMSearchResult(
-                    success=False, nodes_expanded=nodes_expanded,
+                    success=False,
+                    nodes_expanded=nodes_expanded,
                     nodes_generated=nodes_generated,
-                    time_elapsed=time.time() - start_time, error="max_nodes",
+                    time_elapsed=time.time() - start_time,
+                    error="max_nodes",
                 )
 
             vertex = self._get_vertex(graph, current.vertex_id)
@@ -175,14 +184,22 @@ class TMMAStar:
                 h = self.heuristic.evaluate(
                     self._get_vertex(graph, edge.target) or vertex, goal_ids
                 )
-                child = TMMNode(f=g + h, g=g, vertex_id=edge.target, parent=current, edge_from_parent=edge)
+                child = TMMNode(
+                    f=g + h,
+                    g=g,
+                    vertex_id=edge.target,
+                    parent=current,
+                    edge_from_parent=edge,
+                )
                 heapq.heappush(open_set, child)
                 nodes_generated += 1
 
         return TMMSearchResult(
-            success=False, nodes_expanded=nodes_expanded,
+            success=False,
+            nodes_expanded=nodes_expanded,
             nodes_generated=nodes_generated,
-            time_elapsed=time.time() - start_time, error="no_solution",
+            time_elapsed=time.time() - start_time,
+            error="no_solution",
         )
 
     def _get_vertex(self, graph: TaskMotionMultigraph, vid: str) -> Optional[Vertex]:

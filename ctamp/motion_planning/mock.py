@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from ..domain.models import Edge, MotionPlan, ObjectState, Pose, WorkspaceState
@@ -81,8 +81,10 @@ class MockMotionPlanner:
     def _generate_waypoints(self, src: Pose, tgt: Pose) -> list[list[float]]:
         steps = max(2, int(self._distance(src, tgt) * 10))
         return [
-            [src.x + (tgt.x - src.x) * i / (steps - 1),
-             src.y + (tgt.y - src.y) * i / (steps - 1)]
+            [
+                src.x + (tgt.x - src.x) * i / (steps - 1),
+                src.y + (tgt.y - src.y) * i / (steps - 1),
+            ]
             for i in range(steps)
         ]
 

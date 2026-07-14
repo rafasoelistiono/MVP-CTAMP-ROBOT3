@@ -1,4 +1,5 @@
 """Motion planning: trajectory generation and kinematics."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Any

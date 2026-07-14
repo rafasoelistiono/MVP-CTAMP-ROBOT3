@@ -11,4 +11,3 @@ class MuJoCoObserver:
 
     def object_poses(self, object_ids: list[str]) -> dict[str, list[float]]:
         return {oid: self.backend.get_body_pose(f"cube_{oid}") for oid in object_ids}
-

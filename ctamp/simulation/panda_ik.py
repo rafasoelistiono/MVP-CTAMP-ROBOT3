@@ -60,17 +60,25 @@ class PandaIKSolver:
         self.step_size = step_size
         self.max_iterations = max_iterations
         self.site_id = self.mujoco.mj_name2id(
-            self.model, self.mujoco.mjtObj.mjOBJ_SITE, site_name,
+            self.model,
+            self.mujoco.mjtObj.mjOBJ_SITE,
+            site_name,
         )
         if self.site_id < 0:
-            raise ValueError(f"site {site_name!r} not found; real Panda MJCF is required")
+            raise ValueError(
+                f"site {site_name!r} not found; real Panda MJCF is required"
+            )
         self.joint_ids = [self.model.joint(name).id for name in self.JOINT_NAMES]
-        self.qpos_indices = np.array([self.model.jnt_qposadr[j] for j in self.joint_ids])
+        self.qpos_indices = np.array(
+            [self.model.jnt_qposadr[j] for j in self.joint_ids]
+        )
         self.dof_indices = np.array([self.model.jnt_dofadr[j] for j in self.joint_ids])
         self.lower = np.array([self.model.jnt_range[j, 0] for j in self.joint_ids])
         self.upper = np.array([self.model.jnt_range[j, 1] for j in self.joint_ids])
         if self.model.nkey:
-            self.data.qpos[self.qpos_indices] = self.model.key_qpos[0, self.qpos_indices]
+            self.data.qpos[self.qpos_indices] = self.model.key_qpos[
+                0, self.qpos_indices
+            ]
         self.set_gripper_width(0.08)
 
     def current_qpos(self) -> np.ndarray:
@@ -106,7 +114,9 @@ class PandaIKSolver:
             self.set_qpos(np.asarray(seed, dtype=float))
         if orientation is not None and np.asarray(orientation).shape != (3, 3):
             raise ValueError("orientation must be a 3x3 rotation matrix")
-        target_rotation = None if orientation is None else np.asarray(orientation, dtype=float)
+        target_rotation = (
+            None if orientation is None else np.asarray(orientation, dtype=float)
+        )
         jacp = np.zeros((3, self.model.nv))
         jacr = np.zeros((3, self.model.nv))
         for iteration in range(1, self.max_iterations + 1):
@@ -119,12 +129,18 @@ class PandaIKSolver:
                     for axis in range(3)
                 )
             residual = float(np.linalg.norm(position_error))
-            if residual <= self.tolerance and np.linalg.norm(rotation_error) <= orientation_tolerance:
+            if (
+                residual <= self.tolerance
+                and np.linalg.norm(rotation_error) <= orientation_tolerance
+            ):
                 return IKResult(True, tuple(self.current_qpos()), residual, iteration)
             jacp.fill(0.0)
             jacr.fill(0.0)
             self.mujoco.mj_jacSite(
-                self.model, self.data, jacp, jacr if target_rotation is not None else None,
+                self.model,
+                self.data,
+                jacp,
+                jacr if target_rotation is not None else None,
                 self.site_id,
             )
             if target_rotation is None:
@@ -132,17 +148,31 @@ class PandaIKSolver:
                 jacobian = jacp[:, self.dof_indices]
             else:
                 orientation_weight = 0.35
-                error = np.concatenate((position_error, orientation_weight * rotation_error))
-                jacobian = np.vstack((jacp[:, self.dof_indices],
-                                      orientation_weight * jacr[:, self.dof_indices]))
+                error = np.concatenate(
+                    (position_error, orientation_weight * rotation_error)
+                )
+                jacobian = np.vstack(
+                    (
+                        jacp[:, self.dof_indices],
+                        orientation_weight * jacr[:, self.dof_indices],
+                    )
+                )
             system = jacobian @ jacobian.T + self.damping * np.eye(jacobian.shape[0])
             delta = jacobian.T @ np.linalg.solve(system, error)
-            qpos = np.clip(self.current_qpos() + self.step_size * delta,
-                           self.lower + 1e-5, self.upper - 1e-5)
+            qpos = np.clip(
+                self.current_qpos() + self.step_size * delta,
+                self.lower + 1e-5,
+                self.upper - 1e-5,
+            )
             self.set_qpos(qpos)
         residual = float(np.linalg.norm(target_array - self.site_position()))
-        return IKResult(False, tuple(self.current_qpos()), residual, self.max_iterations,
-                        "IK did not converge within tolerance")
+        return IKResult(
+            False,
+            tuple(self.current_qpos()),
+            residual,
+            self.max_iterations,
+            "IK did not converge within tolerance",
+        )
 
     def solve_collision_free(
         self,
@@ -162,22 +192,36 @@ class PandaIKSolver:
         seeds.append(self.current_qpos())
         if self.model.nkey:
             seeds.append(self.model.key_qpos[0, self.qpos_indices].copy())
-        seeds.extend(rng.uniform(self.lower, self.upper) for _ in range(random_restarts))
+        seeds.extend(
+            rng.uniform(self.lower, self.upper) for _ in range(random_restarts)
+        )
         best: IKResult | None = None
         for seed in seeds:
             result = self.solve(
-                target, seed=seed, orientation=orientation,
+                target,
+                seed=seed,
+                orientation=orientation,
                 orientation_tolerance=orientation_tolerance,
             )
             if best is None or result.residual < best.residual:
                 best = result
             if result.success and not self.robot_collision_pairs():
-                return IKResult(True, result.qpos, result.residual, result.iterations,
-                                grasp_style=grasp_style)
+                return IKResult(
+                    True,
+                    result.qpos,
+                    result.residual,
+                    result.iterations,
+                    grasp_style=grasp_style,
+                )
         assert best is not None
-        return IKResult(False, best.qpos, best.residual, best.iterations,
-                        "no collision-free IK solution across multi-start seeds",
-                        grasp_style=grasp_style)
+        return IKResult(
+            False,
+            best.qpos,
+            best.residual,
+            best.iterations,
+            "no collision-free IK solution across multi-start seeds",
+            grasp_style=grasp_style,
+        )
 
     def collision_free_candidates(
         self,
@@ -194,16 +238,22 @@ class PandaIKSolver:
         seeds = []
         if preferred_seed is not None:
             seeds.append(np.asarray(preferred_seed, dtype=float))
-        seeds.extend([
-            np.array([0.0, 0.529, 0.0, -1.98, 0.0, 2.495, -0.75]),
-            np.array([0.0, 0.20, 0.0, -2.40, 0.0, 2.60, -0.75]),
-            np.array([2.827, -1.553, -1.694, -1.797, -1.581, 1.695, -1.079]),
-        ])
-        seeds.extend(rng.uniform(self.lower, self.upper) for _ in range(random_restarts))
+        seeds.extend(
+            [
+                np.array([0.0, 0.529, 0.0, -1.98, 0.0, 2.495, -0.75]),
+                np.array([0.0, 0.20, 0.0, -2.40, 0.0, 2.60, -0.75]),
+                np.array([2.827, -1.553, -1.694, -1.797, -1.581, 1.695, -1.079]),
+            ]
+        )
+        seeds.extend(
+            rng.uniform(self.lower, self.upper) for _ in range(random_restarts)
+        )
         results: list[IKResult] = []
         for seed in seeds:
             result = self.solve(
-                target, seed=seed, orientation=orientation,
+                target,
+                seed=seed,
+                orientation=orientation,
                 orientation_tolerance=orientation_tolerance,
             )
             if not result.success or self.robot_collision_pairs(
@@ -211,7 +261,9 @@ class PandaIKSolver:
             ):
                 continue
             qpos = np.asarray(result.qpos)
-            if any(np.linalg.norm(qpos - np.asarray(old.qpos)) < 0.15 for old in results):
+            if any(
+                np.linalg.norm(qpos - np.asarray(old.qpos)) < 0.15 for old in results
+            ):
                 continue
             results.append(result)
             if len(results) >= max_results:
@@ -242,9 +294,12 @@ class PandaIKSolver:
         best: IKResult | None = None
         for index, (style, target, approach) in enumerate(candidates):
             result = self.solve_collision_free(
-                target, preferred_seed=preferred_seed,
-                random_restarts=random_restarts, rng_seed=42 + index,
-                grasp_style=style, orientation=self._rotation_from_approach(approach),
+                target,
+                preferred_seed=preferred_seed,
+                random_restarts=random_restarts,
+                rng_seed=42 + index,
+                grasp_style=style,
+                orientation=self._rotation_from_approach(approach),
             )
             if result.success:
                 return result
@@ -277,21 +332,28 @@ class PandaIKSolver:
         adaptive_pregrasp = cube - tool_axis * 0.15
         adaptive_grasp = cube - tool_axis * 0.075
         minimum_site_z = float(object_position[2]) + 0.025
-        if adaptive_pregrasp[2] >= minimum_site_z and adaptive_grasp[2] >= minimum_site_z:
+        if (
+            adaptive_pregrasp[2] >= minimum_site_z
+            and adaptive_grasp[2] >= minimum_site_z
+        ):
             adaptive_route = self.solve_path(
                 [tuple(adaptive_pregrasp), tuple(adaptive_grasp)],
                 orientation=adaptive_rotation,
             )
             if adaptive_route.success:
                 return GraspPlanResult(
-                    True, "adaptive_oblique", adaptive_route.joint_waypoints,
+                    True,
+                    "adaptive_oblique",
+                    adaptive_route.joint_waypoints,
                     adaptive_route.max_residual,
                 )
         self.set_qpos(start)
         adaptive_free = self.solve_path([(x, y, z + 0.075)])
         if adaptive_free.success:
             return GraspPlanResult(
-                True, "adaptive_free_orientation", adaptive_free.joint_waypoints,
+                True,
+                "adaptive_free_orientation",
+                adaptive_free.joint_waypoints,
                 adaptive_free.max_residual,
             )
         self.set_qpos(start)
@@ -300,14 +362,23 @@ class PandaIKSolver:
             approach_vector = np.asarray(approach)
             pregrasp = np.asarray(target) - approach_vector * 0.10
             incremental = self._incremental_grasp_route(
-                start, pregrasp, np.asarray(target), orientation,
+                start,
+                pregrasp,
+                np.asarray(target),
+                orientation,
             )
             if incremental is not None:
                 route, residual = incremental
-                return GraspPlanResult(True, style, tuple(tuple(q) for q in route), residual)
+                return GraspPlanResult(
+                    True, style, tuple(tuple(q) for q in route), residual
+                )
             pregrasp_solutions = self.collision_free_candidates(
-                pregrasp, preferred_seed=start, random_restarts=random_restarts,
-                rng_seed=30_000 + style_index, orientation=orientation, max_results=8,
+                pregrasp,
+                preferred_seed=start,
+                random_restarts=random_restarts,
+                rng_seed=30_000 + style_index,
+                orientation=orientation,
+                max_results=8,
             )
             pregrasp_solutions.sort(
                 key=lambda result: np.linalg.norm(np.asarray(result.qpos) - start),
@@ -319,12 +390,16 @@ class PandaIKSolver:
                     route = [start, pregrasp_q]
                 else:
                     route = self.plan_joint_rrt(
-                        start, pregrasp_q, max_iterations=2500,
+                        start,
+                        pregrasp_q,
+                        max_iterations=2500,
                         rng_seed=40_000 + style_index * 20 + candidate_index,
                     )
                 if route is None:
                     continue
-                grasp_result = self.solve(target, seed=pregrasp_q, orientation=orientation)
+                grasp_result = self.solve(
+                    target, seed=pregrasp_q, orientation=orientation
+                )
                 best_residual = min(best_residual, grasp_result.residual)
                 if not grasp_result.success or self.robot_collision_pairs():
                     continue
@@ -333,10 +408,16 @@ class PandaIKSolver:
                     continue
                 full_route = [tuple(q) for q in route]
                 full_route.append(tuple(grasp_q))
-                return GraspPlanResult(True, style, tuple(full_route),
-                                       grasp_result.residual)
-        return GraspPlanResult(False, None, (), best_residual,
-                               "no collision-free top/side pre-grasp and approach")
+                return GraspPlanResult(
+                    True, style, tuple(full_route), grasp_result.residual
+                )
+        return GraspPlanResult(
+            False,
+            None,
+            (),
+            best_residual,
+            "no collision-free top/side pre-grasp and approach",
+        )
 
     def plan_physical_grasp(
         self,
@@ -362,12 +443,17 @@ class PandaIKSolver:
             grasp_target[2] += 0.02 if style == "top" else 0.04
             pregrasp = grasp_target - approach_vector * 0.14
             solutions = self.collision_free_candidates(
-                pregrasp, preferred_seed=start, random_restarts=random_restarts,
-                rng_seed=50_000 + style_index, orientation=orientation,
+                pregrasp,
+                preferred_seed=start,
+                random_restarts=random_restarts,
+                rng_seed=50_000 + style_index,
+                orientation=orientation,
                 max_results=10,
                 orientation_tolerance=0.35,
             )
-            solutions.sort(key=lambda item: np.linalg.norm(np.asarray(item.qpos) - start))
+            solutions.sort(
+                key=lambda item: np.linalg.norm(np.asarray(item.qpos) - start)
+            )
             for candidate_index, pregrasp_result in enumerate(solutions):
                 pregrasp_q = np.asarray(pregrasp_result.qpos)
                 route = None
@@ -375,13 +461,17 @@ class PandaIKSolver:
                     route = [start, pregrasp_q]
                 else:
                     route = self.plan_joint_rrt(
-                        start, pregrasp_q, max_iterations=4000,
+                        start,
+                        pregrasp_q,
+                        max_iterations=4000,
                         rng_seed=60_000 + style_index * 20 + candidate_index,
                     )
                 if route is None:
                     continue
                 grasp = self.solve(
-                    grasp_target, seed=pregrasp_q, orientation=orientation,
+                    grasp_target,
+                    seed=pregrasp_q,
+                    orientation=orientation,
                     orientation_tolerance=0.08,
                 )
                 if not grasp.success or self.robot_collision_pairs(
@@ -390,15 +480,19 @@ class PandaIKSolver:
                     continue
                 grasp_q = np.asarray(grasp.qpos)
                 if self.validate_joint_segment(
-                    pregrasp_q, grasp_q, steps=24, allowed_object_id=object_id,
+                    pregrasp_q,
+                    grasp_q,
+                    steps=24,
+                    allowed_object_id=object_id,
                 ):
                     continue
                 full_route = [tuple(q) for q in route]
                 full_route.append(tuple(grasp_q))
                 return GraspPlanResult(True, style, tuple(full_route), grasp.residual)
         self.set_qpos(start)
-        return GraspPlanResult(False, None, (), float("inf"),
-                               "no contact-valid physical grasp path")
+        return GraspPlanResult(
+            False, None, (), float("inf"), "no contact-valid physical grasp path"
+        )
 
     def _incremental_grasp_route(
         self,
@@ -425,7 +519,9 @@ class PandaIKSolver:
             if np.linalg.det(intermediate_rotation) < 0:
                 u[:, -1] *= -1
                 intermediate_rotation = u @ vt
-            result = self.solve(pregrasp, seed=current_q, orientation=intermediate_rotation)
+            result = self.solve(
+                pregrasp, seed=current_q, orientation=intermediate_rotation
+            )
             if not result.success or self.robot_collision_pairs():
                 return None
             next_q = np.asarray(result.qpos)
@@ -451,7 +547,11 @@ class PandaIKSolver:
     def _rotation_from_approach(approach) -> np.ndarray:
         z_axis = np.asarray(approach, dtype=float)
         z_axis /= np.linalg.norm(z_axis)
-        reference = np.array([1.0, 0.0, 0.0]) if abs(z_axis[2]) > 0.8 else np.array([0.0, 0.0, 1.0])
+        reference = (
+            np.array([1.0, 0.0, 0.0])
+            if abs(z_axis[2]) > 0.8
+            else np.array([0.0, 0.0, 1.0])
+        )
         x_axis = np.cross(reference, z_axis)
         x_axis /= np.linalg.norm(x_axis)
         y_axis = np.cross(z_axis, x_axis)
@@ -462,16 +562,21 @@ class PandaIKSolver:
         for index in range(self.data.ncon):
             contact = self.data.contact[index]
             name1 = self.mujoco.mj_id2name(
-                self.model, self.mujoco.mjtObj.mjOBJ_GEOM, contact.geom1,
+                self.model,
+                self.mujoco.mjtObj.mjOBJ_GEOM,
+                contact.geom1,
             )
             name2 = self.mujoco.mj_id2name(
-                self.model, self.mujoco.mjtObj.mjOBJ_GEOM, contact.geom2,
+                self.model,
+                self.mujoco.mjtObj.mjOBJ_GEOM,
+                contact.geom2,
             )
             pairs.append((name1 or str(contact.geom1), name2 or str(contact.geom2)))
         return pairs
 
     def robot_collision_pairs(
-        self, allowed_object_id: str | None = None,
+        self,
+        allowed_object_id: str | None = None,
     ) -> list[tuple[str, str]]:
         """Return contacts involving Panda links, excluding its mounted base/table contact."""
         pairs = []
@@ -512,34 +617,46 @@ class PandaIKSolver:
             ):
                 local_goal = np.asarray(local_result.qpos)
                 if not self.validate_joint_segment(
-                    start, local_goal, allowed_object_id=allowed_object_id,
+                    start,
+                    local_goal,
+                    allowed_object_id=allowed_object_id,
                 ):
                     max_residual = max(max_residual, local_result.residual)
                     joint_waypoints.append(local_result.qpos)
                     continue
             candidates = self.collision_free_candidates(
-                target, preferred_seed=start, random_restarts=48,
-                rng_seed=1000 + target_index, max_results=8,
+                target,
+                preferred_seed=start,
+                random_restarts=48,
+                rng_seed=1000 + target_index,
+                max_results=8,
                 orientation=orientation,
                 allowed_object_id=allowed_object_id,
             )
             if not candidates:
-                return IKPathResult(False, tuple(joint_waypoints), max_residual,
-                                    tuple(all_collisions),
-                                    "no collision-free IK candidate")
+                return IKPathResult(
+                    False,
+                    tuple(joint_waypoints),
+                    max_residual,
+                    tuple(all_collisions),
+                    "no collision-free IK candidate",
+                )
             route = None
             selected = None
             for result in candidates:
                 candidate = np.asarray(result.qpos)
                 if not self.validate_joint_segment(
-                    start, candidate, allowed_object_id=allowed_object_id,
+                    start,
+                    candidate,
+                    allowed_object_id=allowed_object_id,
                 ):
                     route, selected = [start, candidate], result
                     break
             if route is None:
                 for candidate_index, result in enumerate(candidates):
                     route = self.plan_joint_rrt(
-                        start, np.asarray(result.qpos),
+                        start,
+                        np.asarray(result.qpos),
                         rng_seed=10_000 + target_index * 10 + candidate_index,
                         allowed_object_id=allowed_object_id,
                     )
@@ -547,13 +664,19 @@ class PandaIKSolver:
                         selected = result
                         break
             if route is None or selected is None:
-                return IKPathResult(False, tuple(joint_waypoints), max_residual,
-                                    tuple(all_collisions), "joint-space RRT failed")
+                return IKPathResult(
+                    False,
+                    tuple(joint_waypoints),
+                    max_residual,
+                    tuple(all_collisions),
+                    "joint-space RRT failed",
+                )
             max_residual = max(max_residual, selected.residual)
             joint_waypoints.extend(tuple(q) for q in route[1:])
             self.set_qpos(np.asarray(joint_waypoints[-1]))
-        return IKPathResult(True, tuple(joint_waypoints), max_residual,
-                            tuple(all_collisions))
+        return IKPathResult(
+            True, tuple(joint_waypoints), max_residual, tuple(all_collisions)
+        )
 
     def plan_joint_rrt(
         self,
@@ -569,7 +692,9 @@ class PandaIKSolver:
         if self.robot_collision_pairs(allowed_object_id=allowed_object_id):
             return None
         if not self.validate_joint_segment(
-            start, goal, allowed_object_id=allowed_object_id,
+            start,
+            goal,
+            allowed_object_id=allowed_object_id,
         ):
             return [start, goal]
         rng = np.random.default_rng(rng_seed)
@@ -589,7 +714,10 @@ class PandaIKSolver:
             new = nearest + direction / distance * min(step_size, distance)
             new = np.clip(new, self.lower + 1e-5, self.upper - 1e-5)
             if self.validate_joint_segment(
-                nearest, new, steps=5, allowed_object_id=allowed_object_id,
+                nearest,
+                new,
+                steps=5,
+                allowed_object_id=allowed_object_id,
             ):
                 return None
             nodes.append(new)
@@ -658,10 +786,14 @@ class PandaIKSolver:
         if body_id == 0:
             return "world"
         return self.mujoco.mj_id2name(
-            self.model, self.mujoco.mjtObj.mjOBJ_BODY, body_id,
+            self.model,
+            self.mujoco.mjtObj.mjOBJ_BODY,
+            body_id,
         ) or str(body_id)
 
     def _contact_label(self, geom_id: int, body_id: int) -> str:
-        return (self.mujoco.mj_id2name(
-            self.model, self.mujoco.mjtObj.mjOBJ_GEOM, geom_id,
-        ) or self._body_name(body_id))
+        return self.mujoco.mj_id2name(
+            self.model,
+            self.mujoco.mjtObj.mjOBJ_GEOM,
+            geom_id,
+        ) or self._body_name(body_id)

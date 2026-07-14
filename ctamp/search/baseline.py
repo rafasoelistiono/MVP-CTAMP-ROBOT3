@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..domain.models import Edge, Vertex
+from ..domain.models import Edge
 from ..tmm.multigraph import TaskMotionMultigraph
 from .motion_visitor import MotionPlanningVisitor
 from .tmm_astar import (

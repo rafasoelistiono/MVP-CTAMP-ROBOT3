@@ -1,4 +1,5 @@
 """Cost computation for task-motion planning."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Any
@@ -40,7 +41,7 @@ class TaskCost(CostFunction):
         self.action_costs = action_costs or {}
 
     def compute(self, plan: Any, state: Any = None) -> float:
-        return float(len(plan)) if hasattr(plan, '__len__') else 0.0
+        return float(len(plan)) if hasattr(plan, "__len__") else 0.0
 
 
 class MotionCost(CostFunction):
@@ -51,11 +52,13 @@ class MotionCost(CostFunction):
     def compute(self, trajectory: Any, state: Any = None) -> float:
         if trajectory is None:
             return 0.0
-        return float(len(trajectory)) if hasattr(trajectory, '__len__') else 0.0
+        return float(len(trajectory)) if hasattr(trajectory, "__len__") else 0.0
 
 
 class CompositeCost(CostFunction):
-    def __init__(self, functions: List[CostFunction], weights: Optional[List[float]] = None):
+    def __init__(
+        self, functions: List[CostFunction], weights: Optional[List[float]] = None
+    ):
         self.functions = functions
         self.weights = weights or [1.0] * len(functions)
 

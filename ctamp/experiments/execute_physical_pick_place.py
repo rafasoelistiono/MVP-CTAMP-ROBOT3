@@ -26,7 +26,9 @@ def main() -> int:
     parser.add_argument("--object", default="e")
     parser.add_argument("--viewer", action="store_true")
     parser.add_argument(
-        "--speed", type=float, default=0.5,
+        "--speed",
+        type=float,
+        default=0.5,
         help="viewer real-time factor; 0.5 runs at half speed",
     )
     args = parser.parse_args()
@@ -52,7 +54,9 @@ def main() -> int:
     ik.set_qpos(safe_q)
     obj = objects[args.object]
     grasp = ik.plan_physical_grasp(
-        args.object, tuple(obj["pose"]), start_qpos=safe_q,
+        args.object,
+        tuple(obj["pose"]),
+        start_qpos=safe_q,
     )
     if not grasp.success:
         payload = {
@@ -70,7 +74,9 @@ def main() -> int:
     grasp_rotation = ik.data.site_xmat[ik.site_id].reshape(3, 3).copy()
     lift_target = ik.site_position() + np.array([0.0, 0.0, 0.14])
     lift = ik.solve(
-        lift_target, seed=approach_q, orientation=grasp_rotation,
+        lift_target,
+        seed=approach_q,
+        orientation=grasp_rotation,
         orientation_tolerance=0.10,
     )
     if not lift.success:
@@ -89,7 +95,8 @@ def main() -> int:
     place_target = np.asarray(slot.position) + np.array([0.0, 0.0, 0.06])
     preplace_target = place_target + np.array([0.0, 0.0, 0.14])
     place_path = ik.solve_path(
-        [tuple(preplace_target), tuple(place_target)], orientation=grasp_rotation,
+        [tuple(preplace_target), tuple(place_target)],
+        orientation=grasp_rotation,
         allowed_object_id=args.object,
     )
     if not place_path.success:
@@ -106,7 +113,8 @@ def main() -> int:
         import mujoco.viewer
 
         viewer_context = mujoco.viewer.launch_passive(
-            physics_backend.model, physics_backend.data,
+            physics_backend.model,
+            physics_backend.data,
         )
     with viewer_context as viewer:
         if viewer is not None:
@@ -115,7 +123,9 @@ def main() -> int:
             viewer.cam.azimuth = 90
             viewer.cam.elevation = -32
         executor = PandaPhysicsExecutor(
-            physics_backend, viewer=viewer, realtime_factor=args.speed,
+            physics_backend,
+            viewer=viewer,
+            realtime_factor=args.speed,
         )
         executor.initialize_arm(safe_q)
         executor.open_gripper(steps=120)
@@ -133,7 +143,9 @@ def main() -> int:
             sys.stdout.write(json.dumps(payload, indent=2) + "\n")
             return 2
         grasp_result = executor.validate_grasp_and_lift(
-            args.object, approach_q, lift.qpos,
+            args.object,
+            approach_q,
+            lift.qpos,
             grasp_site_target=np.asarray(obj["pose"]) + np.array([0.0, 0.0, 0.02]),
         )
         if not grasp_result.success:
@@ -183,7 +195,9 @@ def main() -> int:
         executor.set_carry_constraint(args.object, False)
         executor.open_gripper(steps=320)
         if len(place_path.joint_waypoints) >= 2:
-            executor.follow_joint_path([place_path.joint_waypoints[-2]], max_joint_step=0.025)
+            executor.follow_joint_path(
+                [place_path.joint_waypoints[-2]], max_joint_step=0.025
+            )
         executor.settle(steps=180)
         final_position = physics_backend.get_body_pose(f"cube_{args.object}")[:3]
         error_xyz = np.asarray(final_position) - np.asarray(slot.position)

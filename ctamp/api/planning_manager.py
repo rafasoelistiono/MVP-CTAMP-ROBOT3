@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
 from ..domain.models import ObjectState, Pose, Shape
 from ..planning.symbolic import PlanningProblem, SymbolicTaskPlanner

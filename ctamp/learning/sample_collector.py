@@ -80,8 +80,13 @@ class SampleCollector:
             if next_v is None:
                 continue
             self._dfs(
-                next_v, graph, target_poses, goal_ids,
-                path_edges + [edge], current_cost + edge.cost, depth_left - 1,
+                next_v,
+                graph,
+                target_poses,
+                goal_ids,
+                path_edges + [edge],
+                current_cost + edge.cost,
+                depth_left - 1,
             )
 
     def _get_vertex(self, graph: TaskMotionMultigraph, vid: str) -> Optional[Vertex]:

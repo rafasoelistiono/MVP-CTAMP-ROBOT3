@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from ..learning.heuristic_models import LearnedModel, OfflineSVRModel, OnlineSGDModel
-from .models import SampleData, TrainingRequest, TrainingResult
+from .models import TrainingRequest, TrainingResult
 
 
 class LearningManager:

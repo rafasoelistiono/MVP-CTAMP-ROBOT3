@@ -21,12 +21,17 @@ class MuJoCoBackend:
             raise RuntimeError("MuJoCo backend requires `pip install mujoco`") from exc
         return mujoco
 
-    def load_model(self, xml_path: str | Path | None = None, xml_string: str | None = None) -> None:
+    def load_model(
+        self, xml_path: str | Path | None = None, xml_string: str | None = None
+    ) -> None:
         if (xml_path is None) == (xml_string is None):
             raise ValueError("provide exactly one of xml_path or xml_string")
         mujoco = self._mujoco()
-        self.model = (mujoco.MjModel.from_xml_path(str(xml_path)) if xml_path is not None
-                      else mujoco.MjModel.from_xml_string(xml_string))
+        self.model = (
+            mujoco.MjModel.from_xml_path(str(xml_path))
+            if xml_path is not None
+            else mujoco.MjModel.from_xml_string(xml_string)
+        )
         self.data = mujoco.MjData(self.model)
         mujoco.mj_forward(self.model, self.data)
         self._renderer = None
@@ -57,9 +62,9 @@ class MuJoCoBackend:
         values = list(pose)
         if len(values) not in (3, 7):
             raise ValueError("pose must be xyz or xyz+wxyz")
-        self.data.qpos[qadr:qadr + 3] = values[:3]
+        self.data.qpos[qadr : qadr + 3] = values[:3]
         if len(values) == 7:
-            self.data.qpos[qadr + 3:qadr + 7] = values[3:]
+            self.data.qpos[qadr + 3 : qadr + 7] = values[3:]
         mujoco.mj_forward(self.model, self.data)
 
     def check_collision(self) -> bool:
@@ -67,7 +72,10 @@ class MuJoCoBackend:
         return bool(self.data.ncon)
 
     def render_offscreen(
-        self, width: int = 640, height: int = 480, camera: str | int | None = None,
+        self,
+        width: int = 640,
+        height: int = 480,
+        camera: str | int | None = None,
     ):
         self._require_loaded()
         try:
@@ -75,16 +83,22 @@ class MuJoCoBackend:
                 if self._renderer is not None:
                     self._renderer.close()
                 self._renderer = self._mujoco().Renderer(
-                    self.model, height=height, width=width,
+                    self.model,
+                    height=height,
+                    width=width,
                 )
                 self._renderer_size = (width, height)
             self._renderer.update_scene(self.data, camera=camera)
             return self._renderer.render().copy()
         except Exception as exc:  # EGL/OSMesa availability is environment-specific
-            raise RuntimeError("offscreen rendering unavailable; try MUJOCO_GL=egl or osmesa") from exc
+            raise RuntimeError(
+                "offscreen rendering unavailable; try MUJOCO_GL=egl or osmesa"
+            ) from exc
 
     def _body_id(self, name: str) -> int:
-        body_id = self._mujoco().mj_name2id(self.model, self._mujoco().mjtObj.mjOBJ_BODY, name)
+        body_id = self._mujoco().mj_name2id(
+            self.model, self._mujoco().mjtObj.mjOBJ_BODY, name
+        )
         if body_id < 0:
             raise KeyError(name)
         return int(body_id)

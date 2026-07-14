@@ -51,6 +51,8 @@ def _allocate_line(
         )
         for index in range(n)
     }
+
+
 def validate_slots(
     slots: dict[str, tuple[float, float, float]],
     world: WorldState,
@@ -97,9 +99,21 @@ def allocate_grouped_align_slots(
     """Allocate slots for grouped tidy align variant with obstacle-aware Y offsets."""
     obstacle_buffer = 0.13
     y_offsets = [
-        0.0, 0.04, -0.04, 0.08, -0.08, 0.12, -0.12,
-        0.16, -0.16, 0.20, -0.20, 0.24, -0.24,
-        0.28, -0.28,
+        0.0,
+        0.04,
+        -0.04,
+        0.08,
+        -0.08,
+        0.12,
+        -0.12,
+        0.16,
+        -0.16,
+        0.20,
+        -0.20,
+        0.24,
+        -0.24,
+        0.28,
+        -0.28,
     ]
     object_height = 0.066
     minimum_slot_distance = 0.066
@@ -242,7 +256,7 @@ def _check_slot_overlap(
 ) -> None:
     items = list(slots.items())
     for index, (slot_id, pose) in enumerate(items):
-        for other_id, other_pose in items[index + 1:]:
+        for other_id, other_pose in items[index + 1 :]:
             distance = math.dist(pose[:2], other_pose[:2])
             if distance < minimum_distance:
                 raise SlotAllocationError(

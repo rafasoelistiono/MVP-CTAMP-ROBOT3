@@ -1,4 +1,5 @@
 """Search algorithms for combined task-motion planning."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable, Any, Set
@@ -148,7 +149,9 @@ class AStarSearch(SearchAlgorithm):
                     continue
                 g = current.g + cost
                 f = g + config.weight * h.evaluate(next_state)
-                child = SearchNode(f=f, g=g, state=next_state, parent=current, action=action)
+                child = SearchNode(
+                    f=f, g=g, state=next_state, parent=current, action=action
+                )
                 heapq.heappush(open_set, child)
                 nodes_generated += 1
 
@@ -206,12 +209,14 @@ class BeamSearch(SearchAlgorithm):
                 for action, next_state, cost in get_successors(node.state):
                     g = node.g + cost
                     f = g + h.evaluate(next_state)
-                    child = SearchNode(f=f, g=g, state=next_state, parent=node, action=action)
+                    child = SearchNode(
+                        f=f, g=g, state=next_state, parent=node, action=action
+                    )
                     next_beam.append(child)
                     nodes_generated += 1
 
             next_beam.sort(key=lambda n: n.f)
-            current_beam = next_beam[:self.beam_width]
+            current_beam = next_beam[: self.beam_width]
 
         return SearchResult(
             success=False,
@@ -243,9 +248,11 @@ class GreedySearch(SearchAlgorithm):
         while open_set:
             if time.time() - start_time > config.max_time:
                 return SearchResult(
-                    success=False, nodes_expanded=nodes_expanded,
+                    success=False,
+                    nodes_expanded=nodes_expanded,
                     nodes_generated=nodes_generated,
-                    time_elapsed=time.time() - start_time, error="timeout",
+                    time_elapsed=time.time() - start_time,
+                    error="timeout",
                 )
 
             current = heapq.heappop(open_set)
@@ -256,8 +263,10 @@ class GreedySearch(SearchAlgorithm):
 
             if is_goal(current.state):
                 return SearchResult(
-                    success=True, goal_node=current,
-                    nodes_expanded=nodes_expanded, nodes_generated=nodes_generated,
+                    success=True,
+                    goal_node=current,
+                    nodes_expanded=nodes_expanded,
+                    nodes_generated=nodes_generated,
                     time_elapsed=time.time() - start_time,
                 )
 
@@ -265,14 +274,23 @@ class GreedySearch(SearchAlgorithm):
             for action, next_state, cost in get_successors(current.state):
                 if id(next_state) in closed_set:
                     continue
-                child = SearchNode(f=h.evaluate(next_state), g=current.g + cost,
-                                   state=next_state, parent=current, action=action)
+                child = SearchNode(
+                    f=h.evaluate(next_state),
+                    g=current.g + cost,
+                    state=next_state,
+                    parent=current,
+                    action=action,
+                )
                 heapq.heappush(open_set, child)
                 nodes_generated += 1
 
-        return SearchResult(success=False, nodes_expanded=nodes_expanded,
-                           nodes_generated=nodes_generated,
-                           time_elapsed=time.time() - start_time, error="no_solution")
+        return SearchResult(
+            success=False,
+            nodes_expanded=nodes_expanded,
+            nodes_generated=nodes_generated,
+            time_elapsed=time.time() - start_time,
+            error="no_solution",
+        )
 
 
 from .heuristic_estimator import HeuristicPathEstimator

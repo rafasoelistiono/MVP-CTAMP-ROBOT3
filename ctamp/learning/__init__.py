@@ -1,4 +1,5 @@
 """Learned heuristic model for planning."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Tuple
@@ -38,7 +39,9 @@ class HeuristicModel(ABC):
         pass
 
     @abstractmethod
-    def train(self, examples: List[TrainingExample], config: ModelConfig) -> Dict[str, float]:
+    def train(
+        self, examples: List[TrainingExample], config: ModelConfig
+    ) -> Dict[str, float]:
         pass
 
     @abstractmethod
@@ -58,13 +61,15 @@ class MLPHeuristic(HeuristicModel):
         self.trained = False
 
     def predict(self, state_features: np.ndarray, goal_features: np.ndarray) -> float:
-        combined = np.concatenate([state_features, goal_features])[:self.input_dim]
+        combined = np.concatenate([state_features, goal_features])[: self.input_dim]
         if len(combined) < self.input_dim:
             combined = np.pad(combined, (0, self.input_dim - len(combined)))
         h = np.maximum(0, combined @ self.weights[0])
         return float(np.sum(h))
 
-    def train(self, examples: List[TrainingExample], config: ModelConfig) -> Dict[str, float]:
+    def train(
+        self, examples: List[TrainingExample], config: ModelConfig
+    ) -> Dict[str, float]:
         self.trained = True
         return {"loss": 0.0, "mae": 0.0}
 
@@ -84,7 +89,9 @@ class GNNHeuristic(HeuristicModel):
     def predict(self, state_features: np.ndarray, goal_features: np.ndarray) -> float:
         return float(np.sum(state_features) + np.sum(goal_features))
 
-    def train(self, examples: List[TrainingExample], config: ModelConfig) -> Dict[str, float]:
+    def train(
+        self, examples: List[TrainingExample], config: ModelConfig
+    ) -> Dict[str, float]:
         return {"loss": 0.0, "mae": 0.0}
 
     def save(self, path: str) -> None:
@@ -101,7 +108,9 @@ class LearnedHeuristic(HeuristicModel):
     def predict(self, state_features: np.ndarray, goal_features: np.ndarray) -> float:
         return self.model.predict(state_features, goal_features)
 
-    def train(self, examples: List[TrainingExample], config: ModelConfig) -> Dict[str, float]:
+    def train(
+        self, examples: List[TrainingExample], config: ModelConfig
+    ) -> Dict[str, float]:
         return self.model.train(examples, config)
 
     def save(self, path: str) -> None:

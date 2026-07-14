@@ -82,7 +82,9 @@ def generate_tidy_slots(config: dict[str, Any]) -> dict[str, GoalSlot]:
     return slots
 
 
-def _segment_intersects_rect(a: Point, b: Point, rect: tuple[float, float, float, float]) -> bool:
+def _segment_intersects_rect(
+    a: Point, b: Point, rect: tuple[float, float, float, float]
+) -> bool:
     """Liang-Barsky closed-segment/axis-aligned-rectangle intersection."""
     xmin, xmax, ymin, ymax = rect
     dx, dy = b[0] - a[0], b[1] - a[1]
@@ -123,15 +125,23 @@ class MotionProbe:
         self.reach_max = float(robot["reach_max_xy"])
         self.rectangles = [self._inflated_rect(o) for o in config.get("obstacles", [])]
 
-    def _inflated_rect(self, obstacle: dict[str, Any]) -> tuple[float, float, float, float]:
+    def _inflated_rect(
+        self, obstacle: dict[str, Any]
+    ) -> tuple[float, float, float, float]:
         x, y = (float(v) for v in obstacle["pose"][:2])
         sx, sy = (float(v) for v in obstacle["size"][:2])
-        return (x - sx / 2 - self.clearance, x + sx / 2 + self.clearance,
-                y - sy / 2 - self.clearance, y + sy / 2 + self.clearance)
+        return (
+            x - sx / 2 - self.clearance,
+            x + sx / 2 + self.clearance,
+            y - sy / 2 - self.clearance,
+            y + sy / 2 + self.clearance,
+        )
 
     def point_valid(self, point: Point) -> bool:
-        if not (self.table_x[0] <= point[0] <= self.table_x[1]
-                and self.table_y[0] <= point[1] <= self.table_y[1]):
+        if not (
+            self.table_x[0] <= point[0] <= self.table_x[1]
+            and self.table_y[0] <= point[1] <= self.table_y[1]
+        ):
             return False
         reach = math.dist(self.base, point)
         return self.reach_min <= reach <= self.reach_max
@@ -142,13 +152,16 @@ class MotionProbe:
             return False
         return not any(
             _segment_intersects_rect(a, b, rect)
-            for a, b in zip(pts, pts[1:], strict=False) for rect in self.rectangles
+            for a, b in zip(pts, pts[1:], strict=False)
+            for rect in self.rectangles
         )
 
     def probe(self, start: Point, goal: Point) -> ProbeResult:
         direct = (start, goal)
         if self.path_clear(direct):
-            return ProbeResult(True, "direct", direct, _polyline_length(direct), self.clearance)
+            return ProbeResult(
+                True, "direct", direct, _polyline_length(direct), self.clearance
+            )
         margin = 0.01
         candidates: list[tuple[str, tuple[Point, ...]]] = []
         for rect in self.rectangles:
@@ -156,15 +169,37 @@ class MotionProbe:
             # Detour through the two table corridors on either side of the wall.
             # Naming is from the robot's viewpoint; geometrically these are the
             # lower/upper y sides of the rectangular footprint.
-            candidates.extend([
-                ("left_corridor", (start, (start[0], ymax + margin),
-                                   (goal[0], ymax + margin), goal)),
-                ("right_corridor", (start, (start[0], ymin - margin),
-                                    (goal[0], ymin - margin), goal)),
-            ])
+            candidates.extend(
+                [
+                    (
+                        "left_corridor",
+                        (
+                            start,
+                            (start[0], ymax + margin),
+                            (goal[0], ymax + margin),
+                            goal,
+                        ),
+                    ),
+                    (
+                        "right_corridor",
+                        (
+                            start,
+                            (start[0], ymin - margin),
+                            (goal[0], ymin - margin),
+                            goal,
+                        ),
+                    ),
+                ]
+            )
         valid = [(name, path) for name, path in candidates if self.path_clear(path)]
         if valid:
             name, path = min(valid, key=lambda item: _polyline_length(item[1]))
             return ProbeResult(True, name, path, _polyline_length(path), self.clearance)
-        return ProbeResult(False, "failed", direct, _polyline_length(direct), self.clearance,
-                           "no collision-free route within table and reach limits")
+        return ProbeResult(
+            False,
+            "failed",
+            direct,
+            _polyline_length(direct),
+            self.clearance,
+            "no collision-free route within table and reach limits",
+        )

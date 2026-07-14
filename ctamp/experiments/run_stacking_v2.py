@@ -66,17 +66,24 @@ def _safe_zone_positions(
     return positions
 
 
-def _limited_orders(stack: dict[str, Any], max_objects: int | None) -> tuple[list[str], list[str]]:
-    safe_zone_order = list(stack.get(
-        "safe_zone_order_right_first", stack["placeholder_order_small_to_large"],
-    ))
+def _limited_orders(
+    stack: dict[str, Any], max_objects: int | None
+) -> tuple[list[str], list[str]]:
+    safe_zone_order = list(
+        stack.get(
+            "safe_zone_order_right_first",
+            stack["placeholder_order_small_to_large"],
+        )
+    )
     final_order = list(stack["final_order_bottom_to_top"])
     if max_objects is None:
         return safe_zone_order, final_order
 
     safe_zone_order = safe_zone_order[:max_objects]
     selected = set(safe_zone_order)
-    return safe_zone_order, [object_id for object_id in final_order if object_id in selected]
+    return safe_zone_order, [
+        object_id for object_id in final_order if object_id in selected
+    ]
 
 
 def _phase_config(
@@ -91,16 +98,17 @@ def _phase_config(
     config["task"]["target_objects"] = target_order
     config["grouped_tidy"]["slot_prefix"] = phase_name
     config["grouped_tidy"]["axis"] = "z"
-    config["tidy_groups"] = [{
-        "id": phase_name,
-        "color": "mixed",
-        "objects": target_order,
-        "center": target_positions[target_order[0]],
-        "positions": {
-            object_id: target_positions[object_id]
-            for object_id in target_order
-        },
-    }]
+    config["tidy_groups"] = [
+        {
+            "id": phase_name,
+            "color": "mixed",
+            "objects": target_order,
+            "center": target_positions[target_order[0]],
+            "positions": {
+                object_id: target_positions[object_id] for object_id in target_order
+            },
+        }
+    ]
     if object_poses is not None:
         for obj in config["objects"]:
             if obj["id"] in object_poses:
@@ -108,7 +116,9 @@ def _phase_config(
     return config
 
 
-def build_phase_configs(config: dict[str, Any], max_objects: int | None = None) -> tuple[dict, dict, dict]:
+def build_phase_configs(
+    config: dict[str, Any], max_objects: int | None = None
+) -> tuple[dict, dict, dict]:
     stack = config["stacking_v2"]
     sizes = _object_sizes(config)
     safe_zone_order, final_order = _limited_orders(stack, max_objects)
@@ -121,7 +131,9 @@ def build_phase_configs(config: dict[str, Any], max_objects: int | None = None) 
         float(stack["safe_zone_spacing"]),
         table_z,
     )
-    final_positions = _stack_positions(final_order, sizes, stack["final_stack_xy"], table_z)
+    final_positions = _stack_positions(
+        final_order, sizes, stack["final_stack_xy"], table_z
+    )
     phase1 = _phase_config(config, "safe_zone", safe_zone_order, safe_zone_positions)
     phase2 = _phase_config(config, "continuous_stack", final_order, final_positions)
     summary = {
@@ -135,7 +147,9 @@ def build_phase_configs(config: dict[str, Any], max_objects: int | None = None) 
     return phase1, phase2, summary
 
 
-def _write_preview_configs(output: Path, safe_zone_config: dict, stack_config: dict) -> Path:
+def _write_preview_configs(
+    output: Path, safe_zone_config: dict, stack_config: dict
+) -> Path:
     _write_yaml(output / "safe_zone_preview.yaml", safe_zone_config)
     stack_path = output / "continuous_stack.yaml"
     _write_yaml(stack_path, stack_config)
@@ -176,7 +190,9 @@ def run(
 ) -> dict:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     output.mkdir(parents=True, exist_ok=True)
-    safe_zone_config, stack_config, summary = build_phase_configs(config, max_objects=max_objects)
+    safe_zone_config, stack_config, summary = build_phase_configs(
+        config, max_objects=max_objects
+    )
     stack_path = _write_preview_configs(output, safe_zone_config, stack_config)
     _write_json(output / "stacking_plan.json", summary)
 

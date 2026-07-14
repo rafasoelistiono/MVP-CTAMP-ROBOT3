@@ -150,9 +150,7 @@ def _object_rgba(raw: dict, path: str) -> tuple[float, float, float, float] | No
         "white": (1.0, 1.0, 1.0, 1.0),
     }
     if color not in palette:
-        raise ContextValidationError(
-            f"{path}.color must be one of {sorted(palette)}"
-        )
+        raise ContextValidationError(f"{path}.color must be one of {sorted(palette)}")
     return palette[color]
 
 
@@ -209,15 +207,16 @@ def _parse_grouped_tidy(
         unknown = sorted(set(objects) - object_ids)
         if unknown:
             raise ContextValidationError(
-                f"tidy_groups[{idx}] references unknown objects: "
-                + ", ".join(unknown)
+                f"tidy_groups[{idx}] references unknown objects: " + ", ".join(unknown)
             )
         if objects_by_id is not None:
             wrong_color = sorted(
-                oid for oid in objects
+                oid
+                for oid in objects
                 if objects_by_id.get(oid) is not None
                 and objects_by_id[oid].get("color") is not None
-                and str(objects_by_id[oid]["color"]).strip().lower() != color.strip().lower()
+                and str(objects_by_id[oid]["color"]).strip().lower()
+                != color.strip().lower()
             )
             if wrong_color:
                 raise ContextValidationError(
@@ -279,8 +278,7 @@ def _parse_challenge(
     unknown = sorted(set(obs_ids) - obstacle_ids)
     if unknown:
         raise ContextValidationError(
-            "challenge.obstacle_ids references unknown obstacles: "
-            + ", ".join(unknown)
+            "challenge.obstacle_ids references unknown obstacles: " + ", ".join(unknown)
         )
     return ChallengeConfig(
         type=challenge_type,
@@ -290,13 +288,9 @@ def _parse_challenge(
             raw.get("require_obstacle_aware_slots", False)
         ),
         require_motion_probe=bool(raw.get("require_motion_probe", False)),
-        compare_planners=tuple(
-            str(p) for p in raw.get("compare_planners", [])
-        ),
+        compare_planners=tuple(str(p) for p in raw.get("compare_planners", [])),
         min_gap_width=float(raw.get("min_gap_width", 0.0)),
-        inflated_clearance_required=bool(
-            raw.get("inflated_clearance_required", False)
-        ),
+        inflated_clearance_required=bool(raw.get("inflated_clearance_required", False)),
         wall_blocks_direct_path=bool(raw.get("wall_blocks_direct_path", False)),
         side_corridors_required=bool(raw.get("side_corridors_required", False)),
     )
@@ -376,13 +370,14 @@ def build_world_state(path: str | Path) -> WorldState:
     obstacles: list[ObstacleState] = []
     obstacle_ids: set[str] = set()
     challenge_record = sections.get("challenge", {})
-    challenge_wall_ids = {
-        str(value)
-        for value in challenge_record.get("obstacle_ids", [])
-    } if (
-        isinstance(challenge_record, dict)
-        and str(challenge_record.get("type", "")) == "frontal_tall_wall"
-    ) else set()
+    challenge_wall_ids = (
+        {str(value) for value in challenge_record.get("obstacle_ids", [])}
+        if (
+            isinstance(challenge_record, dict)
+            and str(challenge_record.get("type", "")) == "frontal_tall_wall"
+        )
+        else set()
+    )
     for index, raw in enumerate(obstacle_rows):
         required = {"id", "pose", "fragile", "radius", "height"}
         missing = sorted(required - set(raw))
@@ -405,12 +400,16 @@ def build_world_state(path: str | Path) -> WorldState:
             raise ContextValidationError(
                 f"obstacles[{index}].fragile must be true or false"
             )
-        kind = str(
-            raw.get(
-                "kind",
-                "wall" if obstacle_id in challenge_wall_ids else "obstacle",
+        kind = (
+            str(
+                raw.get(
+                    "kind",
+                    "wall" if obstacle_id in challenge_wall_ids else "obstacle",
+                )
             )
-        ).strip().lower()
+            .strip()
+            .lower()
+        )
         if kind not in {"obstacle", "wall"}:
             raise ContextValidationError(
                 f"obstacles[{index}].kind must be 'obstacle' or 'wall'"
@@ -472,8 +471,7 @@ def build_world_state(path: str | Path) -> WorldState:
         distance = math.dist(pose[:2], base_xy)
         reachable = reach_min <= distance <= reach_max
         near_obstacle = any(
-            math.dist(pose[:2], obstacle.pose[:2]) <= 0.18
-            for obstacle in obstacles
+            math.dist(pose[:2], obstacle.pose[:2]) <= 0.18 for obstacle in obstacles
         )
         objects.append(
             ObjectState(
@@ -506,7 +504,9 @@ def build_world_state(path: str | Path) -> WorldState:
     robot_id = str(robot["id"]).strip()
     if not robot_id:
         raise ContextValidationError("robot.id must not be empty")
-    unsupported_capabilities = sorted(set(map(str, capabilities_raw)) - set(ALLOWED_ACTIONS))
+    unsupported_capabilities = sorted(
+        set(map(str, capabilities_raw)) - set(ALLOWED_ACTIONS)
+    )
     if unsupported_capabilities:
         raise ContextValidationError(
             "robot.capabilities contains unsupported actions: "
@@ -520,9 +520,7 @@ def build_world_state(path: str | Path) -> WorldState:
         )
     allowed = tuple(str(value) for value in allowed_raw)
     invalid_predicates = sorted(
-        name
-        for name in allowed
-        if re.fullmatch(r"[a-z][a-z0-9-]*", name) is None
+        name for name in allowed if re.fullmatch(r"[a-z][a-z0-9-]*", name) is None
     )
     if invalid_predicates:
         raise ContextValidationError(
@@ -531,13 +529,9 @@ def build_world_state(path: str | Path) -> WorldState:
         )
 
     if variant.endswith("_no_obs") and obstacles:
-        raise ContextValidationError(
-            f"variant {variant!r} must not define obstacles"
-        )
+        raise ContextValidationError(f"variant {variant!r} must not define obstacles")
     if not variant.endswith("_no_obs") and not obstacles:
-        raise ContextValidationError(
-            f"variant {variant!r} requires obstacle records"
-        )
+        raise ContextValidationError(f"variant {variant!r} requires obstacle records")
     if not isinstance(constraints["preserve_obstacles"], bool):
         raise ContextValidationError(
             "constraints.preserve_obstacles must be true or false"

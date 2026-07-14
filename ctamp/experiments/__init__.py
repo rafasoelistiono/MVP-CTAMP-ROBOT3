@@ -1,4 +1,5 @@
 """Experiment runner and benchmarking."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Callable
@@ -41,7 +42,9 @@ class Experiment(ABC):
 
 
 class BaselineExperiment(Experiment):
-    def __init__(self, name: str = "baseline", planner_factory: Optional[Callable] = None):
+    def __init__(
+        self, name: str = "baseline", planner_factory: Optional[Callable] = None
+    ):
         self.name = name
         self.planner_factory = planner_factory
 

@@ -1,9 +1,8 @@
 """Type hierarchy and object definitions."""
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
-from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 
 class Type:

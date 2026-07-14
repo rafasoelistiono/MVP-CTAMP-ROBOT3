@@ -12,7 +12,7 @@ import numpy as np
 
 from ..benchmark.episode_runner import EpisodeRunner
 from ..benchmark.plots import generate_plots
-from ..learning.heuristic_models import OfflineSVRModel, OnlineSGDModel
+from ..learning.heuristic_models import OfflineSVRModel
 from ..learning.sample_collector import SampleCollector
 from ..planning.symbolic import PlanningProblem, SymbolicTaskPlanner
 from ..tmm.builder import TMMGraphBuilder
@@ -101,14 +101,18 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     for pt, metrics in by_type.items():
         success = sum(1 for m in metrics if m.get("success") == "True")
         costs = [float(m["cost"]) for m in metrics if m.get("success") == "True"]
-        expanded = [int(m["nodes_expanded"]) for m in metrics if m.get("success") == "True"]
+        expanded = [
+            int(m["nodes_expanded"]) for m in metrics if m.get("success") == "True"
+        ]
         times = [float(m["time_elapsed"]) for m in metrics]
 
         avg_cost = sum(costs) / len(costs) if costs else 0
         avg_exp = sum(expanded) / len(expanded) if expanded else 0
         avg_time = sum(times) / len(times) if times else 0
 
-        print(f"{pt:<12} {success:>4}/{len(metrics):<4} {avg_cost:>10.2f} {avg_exp:>10.0f} {avg_time:>8.3f}")
+        print(
+            f"{pt:<12} {success:>4}/{len(metrics):<4} {avg_cost:>10.2f} {avg_exp:>10.0f} {avg_time:>8.3f}"
+        )
 
     if args.output:
         summary = {}
@@ -141,6 +145,7 @@ def cmd_visualize_tmm(args: argparse.Namespace) -> int:
     objects = {}
     for oid, obj_data in config.get("objects", {}).items():
         from ..domain.models import ObjectState, Pose, Shape
+
         objects[oid] = ObjectState(
             object_id=oid,
             pose=Pose(x=obj_data.get("x", 0), y=obj_data.get("y", 0)),
@@ -150,6 +155,7 @@ def cmd_visualize_tmm(args: argparse.Namespace) -> int:
     target_poses = {}
     for oid, pose_data in config.get("target_poses", {}).items():
         from ..domain.models import Pose
+
         target_poses[oid] = Pose(x=pose_data.get("x", 0), y=pose_data.get("y", 0))
 
     problem = PlanningProblem(objects=objects, target_poses=target_poses)
@@ -158,7 +164,9 @@ def cmd_visualize_tmm(args: argparse.Namespace) -> int:
     builder = TMMGraphBuilder()
     tmm_graph = builder.build(symbolic_graph)
 
-    print(f"TMM graph: {tmm_graph._graph.number_of_nodes()} nodes, {tmm_graph._graph.number_of_edges()} edges")
+    print(
+        f"TMM graph: {tmm_graph._graph.number_of_nodes()} nodes, {tmm_graph._graph.number_of_edges()} edges"
+    )
 
     if args.output:
         try:
@@ -167,7 +175,14 @@ def cmd_visualize_tmm(args: argparse.Namespace) -> int:
 
             fig, ax = plt.subplots(figsize=(12, 8))
             pos = nx.spring_layout(tmm_graph._graph, seed=42)
-            nx.draw(tmm_graph._graph, pos, ax=ax, with_labels=True, node_size=200, font_size=8)
+            nx.draw(
+                tmm_graph._graph,
+                pos,
+                ax=ax,
+                with_labels=True,
+                node_size=200,
+                font_size=8,
+            )
             fig.tight_layout()
             fig.savefig(args.output, dpi=150)
             plt.close(fig)
@@ -186,13 +201,21 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # run command
-    run_parser = subparsers.add_parser("run", help="Run planning experiment from config")
-    run_parser.add_argument("--config", required=True, help="Path to experiment config YAML")
+    run_parser = subparsers.add_parser(
+        "run", help="Run planning experiment from config"
+    )
+    run_parser.add_argument(
+        "--config", required=True, help="Path to experiment config YAML"
+    )
     run_parser.set_defaults(func=cmd_run)
 
     # train-offline command
-    train_parser = subparsers.add_parser("train-offline", help="Train offline model from samples")
-    train_parser.add_argument("--samples", required=True, help="Path to samples NPZ file")
+    train_parser = subparsers.add_parser(
+        "train-offline", help="Train offline model from samples"
+    )
+    train_parser.add_argument(
+        "--samples", required=True, help="Path to samples NPZ file"
+    )
     train_parser.add_argument("--output", help="Output model path")
     train_parser.set_defaults(func=cmd_train_offline)
 
@@ -204,7 +227,9 @@ def main() -> int:
 
     # visualize-tmm command
     viz_parser = subparsers.add_parser("visualize-tmm", help="Visualize TMM graph")
-    viz_parser.add_argument("--problem", required=True, help="Path to problem config YAML")
+    viz_parser.add_argument(
+        "--problem", required=True, help="Path to problem config YAML"
+    )
     viz_parser.add_argument("--output", help="Output image path")
     viz_parser.set_defaults(func=cmd_visualize_tmm)
 

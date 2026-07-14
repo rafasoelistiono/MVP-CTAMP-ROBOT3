@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import List, Literal
+from typing import List
 
 from ..domain.models import ObjectState, Pose, Shape
 from ..planning.symbolic import PlanningProblem
@@ -54,11 +54,13 @@ class ProblemGenerator:
     def generate_batch(self, count: int) -> List[PlanningProblem]:
         problems = []
         for i in range(count):
-            gen = ProblemGenerator(ProblemConfig(
-                num_objects=self.config.num_objects,
-                workspace_size=self.config.workspace_size,
-                object_size_range=self.config.object_size_range,
-                seed=self.config.seed + i,
-            ))
+            gen = ProblemGenerator(
+                ProblemConfig(
+                    num_objects=self.config.num_objects,
+                    workspace_size=self.config.workspace_size,
+                    object_size_range=self.config.object_size_range,
+                    seed=self.config.seed + i,
+                )
+            )
             problems.append(gen.generate())
         return problems

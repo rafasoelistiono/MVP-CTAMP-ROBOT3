@@ -21,7 +21,9 @@ def find_panda_asset(project_root: str | Path) -> PandaAsset:
         root / "third_party/mujoco_menagerie/franka_emika_panda",
     )
     for directory in candidates:
-        if directory.is_dir() and ((directory / "panda.xml").is_file()
-                                  or (directory / "models/panda.xml").is_file()):
+        if directory.is_dir() and (
+            (directory / "panda.xml").is_file()
+            or (directory / "models/panda.xml").is_file()
+        ):
             return PandaAsset("real_panda_asset", directory)
     return PandaAsset("fallback_panda_proxy", None)

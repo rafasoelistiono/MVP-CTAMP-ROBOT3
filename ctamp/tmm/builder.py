@@ -4,18 +4,30 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from ..domain.models import Edge, JointSpace, MotionPlan, Vertex
+from ..domain.models import Edge, JointSpace
 from .multigraph import TaskMotionMultigraph
 
 
 JOINT_SPACE_ALTERNATIVES: Dict[str, List[JointSpace]] = {
     "left": [
-        JointSpace(name="left_arm", joints=["l_j1", "l_j2", "l_j3", "l_j4", "l_j5", "l_j6", "l_j7"]),
-        JointSpace(name="left_arm_chest", joints=["l_j1", "l_j2", "l_j3", "l_j4", "l_j5", "l_j6", "l_j7", "chest_j1"]),
+        JointSpace(
+            name="left_arm",
+            joints=["l_j1", "l_j2", "l_j3", "l_j4", "l_j5", "l_j6", "l_j7"],
+        ),
+        JointSpace(
+            name="left_arm_chest",
+            joints=["l_j1", "l_j2", "l_j3", "l_j4", "l_j5", "l_j6", "l_j7", "chest_j1"],
+        ),
     ],
     "right": [
-        JointSpace(name="right_arm", joints=["r_j1", "r_j2", "r_j3", "r_j4", "r_j5", "r_j6", "r_j7"]),
-        JointSpace(name="right_arm_chest", joints=["r_j1", "r_j2", "r_j3", "r_j4", "r_j5", "r_j6", "r_j7", "chest_j1"]),
+        JointSpace(
+            name="right_arm",
+            joints=["r_j1", "r_j2", "r_j3", "r_j4", "r_j5", "r_j6", "r_j7"],
+        ),
+        JointSpace(
+            name="right_arm_chest",
+            joints=["r_j1", "r_j2", "r_j3", "r_j4", "r_j5", "r_j6", "r_j7", "chest_j1"],
+        ),
     ],
 }
 

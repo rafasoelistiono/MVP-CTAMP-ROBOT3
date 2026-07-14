@@ -33,7 +33,8 @@ def main() -> int:
     xml = builder.build_xml()
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
     action = next(
-        (item for item in plan["actions"] if item["object_id"] == args.object), None,
+        (item for item in plan["actions"] if item["object_id"] == args.object),
+        None,
     )
     if action is None:
         parser.error(f"object {args.object!r} is absent from plan")
@@ -46,7 +47,9 @@ def main() -> int:
     ik.set_qpos(grasp_ready)
     obj = objects[args.object]
     physical_grasp = ik.plan_physical_grasp(
-        args.object, tuple(obj["pose"]), start_qpos=grasp_ready,
+        args.object,
+        tuple(obj["pose"]),
+        start_qpos=grasp_ready,
     )
     if not physical_grasp.success:
         raise RuntimeError(f"physical grasp planning failed: {physical_grasp.reason}")
@@ -74,8 +77,11 @@ def main() -> int:
             f"contacts={executor.ik.robot_collision_pairs()}"
         )
     result = executor.validate_grasp_and_lift(
-        args.object, approach_qpos, lift.qpos,
-        grasp_site_target=np.asarray(obj["pose"], dtype=float) + np.array([0.0, 0.0, 0.02]),
+        args.object,
+        approach_qpos,
+        lift.qpos,
+        grasp_site_target=np.asarray(obj["pose"], dtype=float)
+        + np.array([0.0, 0.0, 0.02]),
     )
     payload = {
         "object_id": args.object,

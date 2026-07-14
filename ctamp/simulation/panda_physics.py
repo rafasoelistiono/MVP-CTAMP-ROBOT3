@@ -67,7 +67,10 @@ class PandaPhysicsExecutor:
         self.mujoco.mj_forward(self.model, self.data)
 
     def command_arm(
-        self, target, tolerance: float = 0.018, max_steps: int = 450,
+        self,
+        target,
+        tolerance: float = 0.018,
+        max_steps: int = 450,
     ) -> tuple[bool, float]:
         target_array = np.asarray(target, dtype=float)
         self.data.ctrl[self.arm_actuators] = target_array
@@ -79,7 +82,9 @@ class PandaPhysicsExecutor:
                 return True, error
         return False, error
 
-    def follow_joint_path(self, waypoints, max_joint_step: float = 0.025) -> tuple[bool, float]:
+    def follow_joint_path(
+        self, waypoints, max_joint_step: float = 0.025
+    ) -> tuple[bool, float]:
         worst_error = 0.0
         for waypoint in waypoints:
             start = self.ik.current_qpos()
@@ -89,7 +94,9 @@ class PandaPhysicsExecutor:
                 smooth = alpha * alpha * (3.0 - 2.0 * alpha)
                 target = start + smooth * (goal - start)
                 success, error = self.command_arm(
-                    target, tolerance=0.018, max_steps=450,
+                    target,
+                    tolerance=0.018,
+                    max_steps=450,
                 )
                 worst_error = max(worst_error, error)
                 if not success:
@@ -113,7 +120,9 @@ class PandaPhysicsExecutor:
     def set_carry_constraint(self, object_id: str, active: bool) -> None:
         """Activate transport weld only after contact-validated acquisition."""
         equality_id = self.mujoco.mj_name2id(
-            self.model, self.mujoco.mjtObj.mjOBJ_EQUALITY, f"carry_{object_id}",
+            self.model,
+            self.mujoco.mjtObj.mjOBJ_EQUALITY,
+            f"carry_{object_id}",
         )
         if equality_id < 0:
             raise RuntimeError(f"carry equality missing for {object_id}")
@@ -129,7 +138,8 @@ class PandaPhysicsExecutor:
             relative_rotation = hand_rotation.T @ cube_rotation
             relative_quaternion = np.zeros(4, dtype=float)
             self.mujoco.mju_mat2Quat(
-                relative_quaternion, relative_rotation.reshape(-1),
+                relative_quaternion,
+                relative_rotation.reshape(-1),
             )
             self.model.eq_data[equality_id, 3:6] = relative_position
             self.model.eq_data[equality_id, 6:10] = relative_quaternion
@@ -169,7 +179,11 @@ class PandaPhysicsExecutor:
                 return True, error_norm
             jacobian_full.fill(0.0)
             self.mujoco.mj_jacSite(
-                self.model, self.data, jacobian_full, None, self.ik.site_id,
+                self.model,
+                self.data,
+                jacobian_full,
+                None,
+                self.ik.site_id,
             )
             jacobian = jacobian_full[:, self.ik.dof_indices]
             system = jacobian @ jacobian.T + 0.004 * np.eye(3)
@@ -216,6 +230,14 @@ class PandaPhysicsExecutor:
             reason = "cube did not remain in gripper during lift"
         elif not tracked:
             reason = "arm failed to track lift"
-        return PhysicalGraspResult(success, left and right, left, right,
-                                   initial_z, lifted_z, lift_height,
-                                   max(error, lift_error), reason)
+        return PhysicalGraspResult(
+            success,
+            left and right,
+            left,
+            right,
+            initial_z,
+            lifted_z,
+            lift_height,
+            max(error, lift_error),
+            reason,
+        )

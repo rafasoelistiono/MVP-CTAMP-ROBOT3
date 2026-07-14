@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from .episode_runner import EpisodeRunner
 from .plots import generate_plots
@@ -12,10 +11,20 @@ from .plots import generate_plots
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="CTAMP benchmark runner")
-    parser.add_argument("-n", "--num-episodes", type=int, default=10, help="Number of episodes")
-    parser.add_argument("-o", "--objects", type=str, default="1,2,3,4,5", help="Comma-separated object counts")
+    parser.add_argument(
+        "-n", "--num-episodes", type=int, default=10, help="Number of episodes"
+    )
+    parser.add_argument(
+        "-o",
+        "--objects",
+        type=str,
+        default="1,2,3,4,5",
+        help="Comma-separated object counts",
+    )
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("-d", "--output-dir", type=str, default="results", help="Output directory")
+    parser.add_argument(
+        "-d", "--output-dir", type=str, default="results", help="Output directory"
+    )
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     args = parser.parse_args()
 

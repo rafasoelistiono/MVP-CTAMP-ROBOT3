@@ -23,7 +23,9 @@ from ..tmm.multigraph import TaskMotionMultigraph
 class PlanningProblem:
     objects: dict[str, ObjectState]
     target_poses: dict[str, Pose]
-    available_arms: List[Literal["left", "right"]] = field(default_factory=lambda: ["left", "right"])
+    available_arms: List[Literal["left", "right"]] = field(
+        default_factory=lambda: ["left", "right"]
+    )
 
 
 class SymbolicTaskPlanner:
@@ -36,7 +38,9 @@ class SymbolicTaskPlanner:
 
     def __init__(self, problem: PlanningProblem) -> None:
         self.problem = problem
-        self._joint_space = JointSpace(name="manipulator", joints=["j1", "j2", "j3", "j4", "j5", "j6", "j7"])
+        self._joint_space = JointSpace(
+            name="manipulator", joints=["j1", "j2", "j3", "j4", "j5", "j6", "j7"]
+        )
         self._next_id = 0
 
     def _fresh_id(self) -> int:
@@ -53,7 +57,9 @@ class SymbolicTaskPlanner:
             return graph
 
         for perm in itertools.permutations(obj_ids):
-            for arm_combo in itertools.product(self.problem.available_arms, repeat=len(perm)):
+            for arm_combo in itertools.product(
+                self.problem.available_arms, repeat=len(perm)
+            ):
                 self._build_chain(graph, root, list(perm), list(arm_combo))
 
         return graph
@@ -74,7 +80,9 @@ class SymbolicTaskPlanner:
                 placed=placed,
             )
             graph.add_vertex(pick_vertex)
-            graph.add_edge(self._make_edge(prev_id, pick_vertex.vertex_id, "transit", obj_id, arm))
+            graph.add_edge(
+                self._make_edge(prev_id, pick_vertex.vertex_id, "transit", obj_id, arm)
+            )
 
             placed_after = placed | {obj_id}
             place_vertex = self._make_vertex(
@@ -82,7 +90,15 @@ class SymbolicTaskPlanner:
                 placed=placed_after,
             )
             graph.add_vertex(place_vertex)
-            graph.add_edge(self._make_edge(pick_vertex.vertex_id, place_vertex.vertex_id, "transfer", obj_id, arm))
+            graph.add_edge(
+                self._make_edge(
+                    pick_vertex.vertex_id,
+                    place_vertex.vertex_id,
+                    "transfer",
+                    obj_id,
+                    arm,
+                )
+            )
 
             prev_id = place_vertex.vertex_id
             placed = placed_after
@@ -105,11 +121,16 @@ class SymbolicTaskPlanner:
         holding_id = None
         robot = RobotState(holding_object_id=holding_id)
         objects = {
-            oid: obj for oid, obj in self.problem.objects.items()
-            if oid not in placed
+            oid: obj for oid, obj in self.problem.objects.items() if oid not in placed
         }
         ws = WorkspaceState(objects=objects)
-        return Vertex(vertex_id=vid, robot_state=robot, workspace_state=ws, is_root=is_root, is_goal=is_goal)
+        return Vertex(
+            vertex_id=vid,
+            robot_state=robot,
+            workspace_state=ws,
+            is_root=is_root,
+            is_goal=is_goal,
+        )
 
     def _make_edge(
         self,
@@ -128,4 +149,6 @@ class SymbolicTaskPlanner:
             object_id=obj_id,
             arm=arm if arm else "left",  # default for 'done'
         )
-        return Edge(source=src, target=tgt, action=action, joint_space=self._joint_space)
+        return Edge(
+            source=src, target=tgt, action=action, joint_space=self._joint_space
+        )

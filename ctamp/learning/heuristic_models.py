@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
 import numpy as np
 
@@ -73,6 +71,7 @@ class OfflineSVRModel(LearnedModel):
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         from sklearn.svm import SVR
+
         self._model = SVR(kernel=self.kernel, C=self.C)
         self._model.fit(X, y)
         self._fitted = True
@@ -82,16 +81,28 @@ class OfflineSVRModel(LearnedModel):
             self.fit(X, y)
         else:
             X_all = np.vstack([self._model.support_vectors_, X])
-            y_all = np.concatenate([self._model._y if hasattr(self._model, '_y') else y, y])
+            y_all = np.concatenate(
+                [self._model._y if hasattr(self._model, "_y") else y, y]
+            )
             self.fit(X_all, y_all)
 
     def save(self, path: str) -> None:
         import pickle
+
         with open(path, "wb") as f:
-            pickle.dump({"model": self._model, "fitted": self._fitted, "kernel": self.kernel, "C": self.C}, f)
+            pickle.dump(
+                {
+                    "model": self._model,
+                    "fitted": self._fitted,
+                    "kernel": self.kernel,
+                    "C": self.C,
+                },
+                f,
+            )
 
     def load(self, path: str) -> None:
         import pickle
+
         with open(path, "rb") as f:
             data = pickle.load(f)
         self._model = data["model"]
@@ -114,12 +125,14 @@ class OnlineSGDModel(LearnedModel):
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         from sklearn.linear_model import SGDRegressor
+
         self._model = SGDRegressor(alpha=self.alpha, max_iter=1000, tol=1e-3)
         self._model.fit(X, y)
         self._fitted = True
 
     def partial_fit(self, X: np.ndarray, y: np.ndarray) -> None:
         from sklearn.linear_model import SGDRegressor
+
         if self._model is None:
             self._model = SGDRegressor(alpha=self.alpha, max_iter=1000, tol=1e-3)
         if not self._fitted:
@@ -130,11 +143,15 @@ class OnlineSGDModel(LearnedModel):
 
     def save(self, path: str) -> None:
         import pickle
+
         with open(path, "wb") as f:
-            pickle.dump({"model": self._model, "fitted": self._fitted, "alpha": self.alpha}, f)
+            pickle.dump(
+                {"model": self._model, "fitted": self._fitted, "alpha": self.alpha}, f
+            )
 
     def load(self, path: str) -> None:
         import pickle
+
         with open(path, "rb") as f:
             data = pickle.load(f)
         self._model = data["model"]

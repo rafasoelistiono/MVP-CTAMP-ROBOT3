@@ -8,8 +8,15 @@ import time
 import heapq
 
 from ..domain import (
-    Domain, Problem, State, GroundPredicate, GroundAction,
-    Operator, Object, Predicate, PredicateType
+    Domain,
+    Problem,
+    State,
+    GroundPredicate,
+    GroundAction,
+    Operator,
+    Object,
+    Predicate,
+    PredicateType,
 )
 
 
@@ -186,9 +193,7 @@ class TaskPlanner:
                     actions.append(ga)
         return actions
 
-    def _get_groundings(
-        self, op: Operator, problem: Problem
-    ) -> List[tuple]:
+    def _get_groundings(self, op: Operator, problem: Problem) -> List[tuple]:
         from itertools import product
 
         param_types = [p.type for p in op.schema.parameters]

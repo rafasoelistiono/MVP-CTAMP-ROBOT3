@@ -54,7 +54,9 @@ def main() -> int:
         while viewer.is_running():
             backend.reset()
             executor = PandaPhysicsExecutor(
-                backend, viewer=viewer, realtime_factor=args.speed,
+                backend,
+                viewer=viewer,
+                realtime_factor=args.speed,
             )
             executor.initialize_arm(safe_q)
             for action in actions:
@@ -67,7 +69,8 @@ def main() -> int:
                     continue
                 executor.open_gripper(steps=120)
                 tracked, _ = executor.follow_joint_path(
-                    transit[1:-1], max_joint_step=0.025,
+                    transit[1:-1],
+                    max_joint_step=0.025,
                 )
                 if not tracked:
                     continue
@@ -75,14 +78,16 @@ def main() -> int:
                     object_id,
                     transit[-1],
                     transfer[0],
-                    grasp_site_target=np.asarray(objects[object_id]["pose"]) + np.array([0.0, 0.0, 0.02]),
+                    grasp_site_target=np.asarray(objects[object_id]["pose"])
+                    + np.array([0.0, 0.0, 0.02]),
                     grip_width=float(action.get("grasp_width", 0.052)),
                 )
                 if not grasp.success:
                     executor.open_gripper(steps=120)
                     continue
                 tracked, _ = executor.follow_joint_path(
-                    transfer[1:], max_joint_step=0.025,
+                    transfer[1:],
+                    max_joint_step=0.025,
                 )
                 executor.set_carry_constraint(object_id, False)
                 executor.open_gripper(steps=220)

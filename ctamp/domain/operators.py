@@ -1,12 +1,12 @@
 """Operator and action definitions."""
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple, FrozenSet, Callable, Any
+from dataclasses import dataclass
+from typing import List, Tuple
 from abc import ABC, abstractmethod
 
-from .types import Type, TypeHierarchy, Object
-from .predicates import Predicate, GroundPredicate, State
+from .types import Type, Object
+from .predicates import Predicate, State
 
 
 @dataclass(frozen=True)
@@ -24,10 +24,14 @@ class OperatorSchema:
 
     def ground(self, objects: Tuple[Object, ...]) -> "GroundAction":
         if len(objects) != len(self.parameters):
-            raise ValueError(f"Operator {self.name} expects {len(self.parameters)} args")
+            raise ValueError(
+                f"Operator {self.name} expects {len(self.parameters)} args"
+            )
         for obj, (_, expected_type) in zip(objects, self.parameters):
             if not obj.type.is_subtype(expected_type):
-                raise TypeError(f"Object {obj} has type {obj.type}, expected {expected_type}")
+                raise TypeError(
+                    f"Object {obj} has type {obj.type}, expected {expected_type}"
+                )
         return GroundAction(self, objects)
 
     def is_applicable(self, state: State, objects: Tuple[Object, ...]) -> bool:
@@ -73,7 +77,11 @@ class GroundAction:
         return hash((self.schema, self.objects))
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, GroundAction) and self.schema == other.schema and self.objects == other.objects
+        return (
+            isinstance(other, GroundAction)
+            and self.schema == other.schema
+            and self.objects == other.objects
+        )
 
 
 class Operator:

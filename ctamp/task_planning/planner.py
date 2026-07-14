@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple, Callable, Any
+from typing import List, Optional
 from abc import ABC, abstractmethod
 
-from ..domain import Domain, Problem, State, GroundPredicate, GroundAction, Operator
+from ..domain import Problem, State, GroundAction
+from .search import AStarSearch
 
 
 @dataclass
@@ -41,11 +42,12 @@ class RelaxedPlanHeuristic(Heuristic):
         return float(len(problem.goal - state.predicates))
 
 
-from .search import AStarSearch, SearchNode
-
-
 class TaskPlanner:
-    def __init__(self, config: Optional[PlannerConfig] = None, heuristic: Optional[Heuristic] = None):
+    def __init__(
+        self,
+        config: Optional[PlannerConfig] = None,
+        heuristic: Optional[Heuristic] = None,
+    ):
         self.config = config or PlannerConfig()
         self.heuristic = heuristic or AdditiveHeuristic()
 

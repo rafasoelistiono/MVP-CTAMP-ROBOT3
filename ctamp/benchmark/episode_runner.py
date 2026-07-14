@@ -8,18 +8,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Literal
 
-from ..domain.models import Vertex
 from ..learning.heuristic_models import (
-    ConstantHeuristicModel,
     LearnedModel,
     OfflineSVRModel,
     OnlineSGDModel,
 )
-from ..learning.path_features import PathFeatureConfig
-from ..planning.symbolic import PlanningProblem, SymbolicTaskPlanner
-from ..search.baseline import BaselinePlanner, BaselineResult
+from ..planning.symbolic import SymbolicTaskPlanner
+from ..search.baseline import BaselinePlanner
 from ..search.heuristic_estimator import HeuristicPathEstimator
-from ..search.motion_visitor import MotionPlanningVisitor
 from ..tmm.builder import TMMGraphBuilder
 from ..tmm.multigraph import TaskMotionMultigraph
 from .problem_generator import ProblemConfig, ProblemGenerator
@@ -99,19 +95,33 @@ class EpisodeRunner:
         baseline_metrics = self._run_baseline(episode_id, num_objects, tmm_graph)
         result.metrics["baseline"] = baseline_metrics
 
-        offline_metrics = self._run_learned(episode_id, num_objects, tmm_graph, "offline")
+        offline_metrics = self._run_learned(
+            episode_id, num_objects, tmm_graph, "offline"
+        )
         result.metrics["offline"] = offline_metrics
 
         online_metrics = self._run_learned(episode_id, num_objects, tmm_graph, "online")
         result.metrics["online"] = online_metrics
 
         if baseline_metrics.success and offline_metrics.success:
-            offline_metrics.epsilon_suboptimal = offline_metrics.cost / baseline_metrics.cost if baseline_metrics.cost > 0 else None
-            offline_metrics.heuristic_error = abs(offline_metrics.cost - baseline_metrics.cost)
+            offline_metrics.epsilon_suboptimal = (
+                offline_metrics.cost / baseline_metrics.cost
+                if baseline_metrics.cost > 0
+                else None
+            )
+            offline_metrics.heuristic_error = abs(
+                offline_metrics.cost - baseline_metrics.cost
+            )
 
         if baseline_metrics.success and online_metrics.success:
-            online_metrics.epsilon_suboptimal = online_metrics.cost / baseline_metrics.cost if baseline_metrics.cost > 0 else None
-            online_metrics.heuristic_error = abs(online_metrics.cost - baseline_metrics.cost)
+            online_metrics.epsilon_suboptimal = (
+                online_metrics.cost / baseline_metrics.cost
+                if baseline_metrics.cost > 0
+                else None
+            )
+            online_metrics.heuristic_error = abs(
+                online_metrics.cost - baseline_metrics.cost
+            )
 
         return result
 
@@ -161,7 +171,9 @@ class EpisodeRunner:
             time_elapsed=result.time_elapsed,
         )
 
-    def save_csv(self, results: List[EpisodeResult], filename: str = "episodes.csv") -> None:
+    def save_csv(
+        self, results: List[EpisodeResult], filename: str = "episodes.csv"
+    ) -> None:
         path = self.output_dir / filename
         rows = []
         for result in results:
@@ -175,7 +187,9 @@ class EpisodeRunner:
             writer.writeheader()
             writer.writerows(rows)
 
-    def save_json(self, results: List[EpisodeResult], filename: str = "episodes.json") -> None:
+    def save_json(
+        self, results: List[EpisodeResult], filename: str = "episodes.json"
+    ) -> None:
         path = self.output_dir / filename
         data = []
         for result in results:

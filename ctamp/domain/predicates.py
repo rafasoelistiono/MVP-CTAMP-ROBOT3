@@ -1,11 +1,10 @@
 """Predicate definitions and state representation."""
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple, FrozenSet, Any
-from functools import lru_cache
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, FrozenSet
 
-from .types import Type, TypeHierarchy, Object
+from .types import Type, Object
 
 
 @dataclass(frozen=True)
@@ -34,10 +33,14 @@ class Predicate:
 
     def __call__(self, *objects: Object) -> GroundPredicate:
         if len(objects) != len(self.signature.param_types):
-            raise ValueError(f"Predicate {self.name} expects {len(self.signature.param_types)} args")
+            raise ValueError(
+                f"Predicate {self.name} expects {len(self.signature.param_types)} args"
+            )
         for obj, expected_type in zip(objects, self.signature.param_types):
             if not obj.type.is_subtype(expected_type):
-                raise TypeError(f"Object {obj} has type {obj.type}, expected {expected_type}")
+                raise TypeError(
+                    f"Object {obj} has type {obj.type}, expected {expected_type}"
+                )
         return GroundPredicate(self, objects)
 
     @property
@@ -74,7 +77,11 @@ class GroundPredicate:
         return hash((self.predicate, self.objects))
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, GroundPredicate) and self.predicate == other.predicate and self.objects == other.objects
+        return (
+            isinstance(other, GroundPredicate)
+            and self.predicate == other.predicate
+            and self.objects == other.objects
+        )
 
 
 class State:
@@ -119,14 +126,10 @@ class State:
     def with_static(self, static: FrozenSet[GroundPredicate]) -> "State":
         return State(self._predicates, static, self._objects)
 
-    def __contains__(self, pred: GroundPredicate) -> bool:
-        return self.holds(pred)
-
-    def __contains__(self, pred: str) -> bool:
-        return any(p.name == pred for p in self._predicates)
-
-    def __contains__(self, pred: GroundPredicate) -> bool:
-        return self.holds(pred)
+    def __contains__(self, pred: object) -> bool:
+        if isinstance(pred, str):
+            return any(p.name == pred for p in self._predicates)
+        return pred in self._predicates or pred in self._static_predicates
 
     def __repr__(self) -> str:
         preds = sorted(self._predicates, key=str)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import heapq
 from typing import Optional, Set
 
-import numpy as np
 
 from ..domain.models import Edge, Vertex
 from ..learning.heuristic_models import LearnedModel

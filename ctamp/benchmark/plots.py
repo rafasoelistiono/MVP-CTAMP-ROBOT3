@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.util import find_spec
 from collections import defaultdict
 from pathlib import Path
 from typing import List
@@ -13,16 +14,16 @@ from .episode_runner import EpisodeMetrics, EpisodeResult
 
 def generate_plots(results: List[EpisodeResult], output_dir: str) -> None:
     """Generate benchmark plots for expanded vertices, runtime, and solution cost ratio."""
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
+    if find_spec("matplotlib.pyplot") is None:
         print("matplotlib not installed, skipping plots")
         return
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    by_objects: dict[int, dict[str, list[EpisodeMetrics]]] = defaultdict(lambda: defaultdict(list))
+    by_objects: dict[int, dict[str, list[EpisodeMetrics]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for result in results:
         for planner_type, metrics in result.metrics.items():
             by_objects[result.num_objects][planner_type].append(metrics)
@@ -52,7 +53,9 @@ def _plot_expanded(
         for oc in object_counts:
             metrics = by_objects[oc].get(pt, [])
             successful = [m for m in metrics if m.success]
-            vals.append(np.mean([m.nodes_expanded for m in successful]) if successful else 0)
+            vals.append(
+                np.mean([m.nodes_expanded for m in successful]) if successful else 0
+            )
         ax.bar(x + i * width, vals, width, label=pt)
 
     ax.set_xlabel("Number of Objects")
@@ -116,7 +119,9 @@ def _plot_cost_ratio(
             learned = [m for m in by_objects[oc].get(pt, []) if m.success]
             baseline = [m for m in by_objects[oc].get("baseline", []) if m.success]
             if learned and baseline:
-                ratio = np.mean([m.cost for m in learned]) / np.mean([m.cost for m in baseline])
+                ratio = np.mean([m.cost for m in learned]) / np.mean(
+                    [m.cost for m in baseline]
+                )
                 ratios.append(ratio)
             else:
                 ratios.append(np.nan)

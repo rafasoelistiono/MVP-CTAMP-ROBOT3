@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Callable, Any, Generic, TypeVar
+from typing import List, Optional, Set, Callable, Generic, TypeVar
 import heapq
 import time
 
-from ..domain import Problem, State, GroundAction
+from ..domain import GroundAction, Operator, Problem, State
 
 T = TypeVar("T")
 
@@ -71,7 +71,9 @@ class AStarSearch:
 
         while open_set and nodes_expanded < self.max_nodes:
             if time.time() - start_time > 30.0:
-                return SearchResult(False, nodes_expanded=nodes_expanded, error="timeout")
+                return SearchResult(
+                    False, nodes_expanded=nodes_expanded, error="timeout"
+                )
 
             current = heapq.heappop(open_set)
 
@@ -102,9 +104,13 @@ class AStarSearch:
                 )
                 heapq.heappush(open_set, child)
 
-        return SearchResult(False, nodes_expanded=nodes_expanded, error="max nodes reached")
+        return SearchResult(
+            False, nodes_expanded=nodes_expanded, error="max nodes reached"
+        )
 
-    def _get_applicable_actions(self, state: State, problem: Problem) -> List[GroundAction]:
+    def _get_applicable_actions(
+        self, state: State, problem: Problem
+    ) -> List[GroundAction]:
         actions = []
         for op in problem.domain.operators.values():
             for objects in self._get_groundings(op, problem):
@@ -115,8 +121,11 @@ class AStarSearch:
 
     def _get_groundings(self, op: Operator, problem: Problem) -> List[tuple]:
         from itertools import product
+
         param_types = [t for _, t in op.schema.parameters]
         candidates = []
         for t in param_types:
-            candidates.append([obj for obj in problem.objects if obj.type.is_subtype(t)])
+            candidates.append(
+                [obj for obj in problem.objects if obj.type.is_subtype(t)]
+            )
         return list(product(*candidates))

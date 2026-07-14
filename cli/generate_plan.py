@@ -16,10 +16,14 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument("--context", required=True, type=Path)
     parser.add_argument("--task", default="align")
-    parser.add_argument("--output", default=ROOT_DIR / "task_plans/generated", type=Path)
+    parser.add_argument(
+        "--output", default=ROOT_DIR / "task_plans/generated", type=Path
+    )
     parser.add_argument("--max-retries-per-object", type=int)
     parser.add_argument("--max-objects", type=int)
-    parser.add_argument("--response-file", type=Path, help="Ignored legacy TaskPlan arg.")
+    parser.add_argument(
+        "--response-file", type=Path, help="Ignored legacy TaskPlan arg."
+    )
     parser.add_argument("--experiment-label", default="")
     return parser.parse_args()
 
