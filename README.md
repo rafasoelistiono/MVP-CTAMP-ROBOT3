@@ -1,20 +1,20 @@
 # CTAMP Robot
 
-Repository ini menjalankan pipeline CTAMP untuk perencanaan task, perencanaan gerak, IK Panda 7-DOF, dan eksekusi MuJoCo.
+This repository runs a CTAMP pipeline for task planning, motion planning, 7-DOF Panda IK, and MuJoCo execution.
 
-README ini memakai sudut pandang paling konkret: pengguna memberikan [`stacking_wall_world_v2.yaml`](configs/scenes/stacking_wall_world_v2.yaml), lalu mengikuti datanya sampai enam kubus dicoba untuk ditumpuk.
+This README follows one concrete path. A user provides [`stacking_wall_world_v2.yaml`](configs/scenes/stacking_wall_world_v2.yaml), and the document traces that data until all six cubes have been attempted.
 
-Jalur baca cepat: bagian 1-3 menjelaskan YAML, target, dan urutan. Bagian 4-7 menjelaskan frame, planning, IK, dan sukses. Bagian 8 khusus TMM. Bagian 9-10 menunjukkan output dan bukti tes.
+Sections 1-3 cover the YAML input, targets, and ordering. Sections 4-7 cover coordinate frames, planning, IK, execution, and success. Section 8 explains the TMM. Sections 9-10 cover outputs and tests.
 
-## Tiga hal yang perlu dipahami lebih dahulu
+## Three Things to Understand First
 
-1. Pada skenario stacking, YAML menentukan urutan `c6 -> c5 -> ... -> c1`. Planner tidak menebak sendiri kubus mana yang paling besar.
-2. Motion probe 2-D dan IK/eksekusi fisik adalah dua lapisan berbeda. Hasil keduanya dicatat, tetapi physical mode memakai keberhasilan fisik sebagai keputusan per objek.
-3. TMM dibuat setelah loop pick-place selesai. TMM saat ini tidak memilih urutan stacking dan tidak mengirim trajectory ke robot.
+1. In the stacking scenario, the YAML fixes the order `c6 -> c5 -> ... -> c1`. The planner does not infer which cube is largest.
+2. The 2-D motion probe and physical IK/execution are separate validation layers. Both are recorded, but physical mode uses physical execution to decide per-object success.
+3. The TMM is built after the pick-place loop. It currently does not select the stacking order or send trajectories to the robot.
 
-## Menjalankan stacking
+## Run the Stacking Scenario
 
-Preview target tanpa menjalankan MuJoCo:
+Preview the targets without running MuJoCo:
 
 ```bash
 python3 -m cli.run_stacking_v2 \
@@ -23,7 +23,7 @@ python3 -m cli.run_stacking_v2 \
   --dry-run
 ```
 
-Eksekusi penuh:
+Run the full scenario:
 
 ```bash
 python3 -m cli.run_stacking_v2 \
@@ -31,41 +31,41 @@ python3 -m cli.run_stacking_v2 \
   --output runs/stacking_v2
 ```
 
-Tambahkan `--viewer` untuk membuka viewer MuJoCo. Gunakan `python` sebagai pengganti `python3` jika nama interpreter di sistem Anda adalah `python`.
+Add `--viewer` to open the MuJoCo viewer. Use `python` instead of `python3` if that is the interpreter name on your system.
 
-Entry point setelah package dipasang adalah `ctamp-run-stacking-v2`.
+After installation, the equivalent entry point is `ctamp-run-stacking-v2`.
 
-## Peta alur end-to-end
+## End-to-End Flow
 
 ```mermaid
 flowchart TD
     A["stacking_wall_world_v2.yaml"] --> B["yaml.safe_load"]
-    B --> C["Hitung safe-zone preview"]
-    B --> D["Hitung posisi final stack"]
-    C --> E["Tulis safe_zone_preview.yaml"]
-    D --> F["Tulis continuous_stack.yaml"]
+    B --> C["Compute safe-zone preview"]
+    B --> D["Compute final stack positions"]
+    C --> E["Write safe_zone_preview.yaml"]
+    D --> F["Write continuous_stack.yaml"]
     F --> G["run_scene_v2"]
-    G --> H["Load config + buat scene MuJoCo"]
-    H --> I["Ambil objek sesuai urutan YAML"]
-    I --> J["Probe 2-D untuk diagnosis dan TMM cost"]
-    I --> K{"Mode runtime"}
-    K -->|"Panda + physical executor"| L["IK + direct joint check + RRT bila perlu + eksekusi"]
-    K -->|"Panda tanpa executor"| V["IK preview"]
-    K -->|"Panda proxy"| W["Update pose geometrik"]
-    J -. "waypoint dipakai pada IK preview" .-> V
-    J --> X["Catat hasil objek"]
+    G --> H["Load config and build MuJoCo scene"]
+    H --> I["Select object in YAML order"]
+    I --> J["2-D probe for diagnostics and TMM cost"]
+    I --> K{"Runtime mode"}
+    K -->|"Panda + physical executor"| L["IK + direct joint check + RRT if needed + execution"]
+    K -->|"Panda without executor"| V["IK preview"]
+    K -->|"Panda proxy"| W["Geometric pose update"]
+    J -. "waypoints used by IK preview" .-> V
+    J --> X["Record object result"]
     L --> X
     V --> X
     W --> X
-    X --> M{"Masih ada objek?"}
-    M -->|Ya| I
-    M -->|Tidak| N["Hitung completion"]
-    N --> O["Bangun ordered TMM"]
-    O --> P["A* mencari root sampai goal"]
+    X --> M{"Objects remaining?"}
+    M -->|"Yes"| I
+    M -->|"No"| N["Compute completion"]
+    N --> O["Build ordered TMM"]
+    O --> P["A* searches from root to goal"]
     P --> Q["solution_found + artifacts"]
 ```
 
-Urutan file pemanggilnya adalah:
+The call chain is:
 
 ```text
 cli/run_stacking_v2.py
@@ -74,11 +74,11 @@ cli/run_stacking_v2.py
         -> ctamp/experiments/run_scene.py
 ```
 
-`run_scene_v2` tidak mengganti logika keberhasilan v1. Ia membungkus `run_scene` dengan cache `plan_xy` dan batching MuJoCo. Buktinya ada di [`run_scene_v2.run()`](ctamp/experiments/run_scene_v2.py#L93-L124).
+`run_scene_v2` does not replace the v1 success logic. It wraps `run_scene` with `plan_xy` caching and MuJoCo batching. See [`run_scene_v2.run()`](ctamp/experiments/run_scene_v2.py#L93-L124).
 
-## 1. YAML dibaca sebagai kontrak scene
+## 1. YAML as the Scene Contract
 
-Bagian terpenting dari YAML stacking adalah:
+The most important parts of the stacking YAML are:
 
 ```yaml
 table:
@@ -102,46 +102,46 @@ stacking_v2:
   final_order_bottom_to_top: [c6, c5, c4, c3, c2, c1]
 ```
 
-Sumber lengkapnya ada di [`configs/scenes/stacking_wall_world_v2.yaml`](configs/scenes/stacking_wall_world_v2.yaml#L1-L83).
+The full source is [`configs/scenes/stacking_wall_world_v2.yaml`](configs/scenes/stacking_wall_world_v2.yaml#L1-L83).
 
-Arti field yang benar-benar memengaruhi alur:
+Fields that affect the runtime flow:
 
-| Field YAML | Dipakai untuk |
+| YAML field | Purpose |
 |---|---|
-| `objects[].pose` | Posisi awal pusat kubus pada frame dunia MuJoCo |
-| `objects[].size_xyz` | Ukuran kubus, target tinggi stack, dan geometri MuJoCo |
-| `objects[].grip_target_width` | Bukaan gripper untuk kubus tersebut |
-| `robot.base_xy/base_z` | Posisi base Panda pada dunia MuJoCo |
-| `robot.reach_min_xy/reach_max_xy` | Batas radial pada MotionProbe 2-D |
-| `robot.physical_start_qpos` | Konfigurasi awal tujuh joint Panda |
-| `task.target_objects` | Daftar objek yang harus dicoba |
-| `task.preserve_order` | Memaksa runner mengambil objek sesuai urutan |
-| `obstacles[].pose/size` | Footprint obstacle untuk scene dan route probe |
-| `constraints.max_retries_per_object` | Batas pengulangan probe transfer |
-| `stacking_v2.final_stack_xy` | Titik X-Y bersama untuk semua lapisan stack |
-| `stacking_v2.final_order_bottom_to_top` | Urutan dasar sampai puncak |
-| `physical_execution.completion_policy` | Aturan penerimaan hasil akhir |
+| `objects[].pose` | Initial cube-center position in the MuJoCo world frame |
+| `objects[].size_xyz` | Cube geometry and target stack height |
+| `objects[].grip_target_width` | Requested gripper opening for that cube |
+| `robot.base_xy/base_z` | Panda base position in the MuJoCo world |
+| `robot.reach_min_xy/reach_max_xy` | Radial limits used by the 2-D MotionProbe |
+| `robot.physical_start_qpos` | Initial configuration of the seven Panda joints |
+| `task.target_objects` | Objects that must be attempted |
+| `task.preserve_order` | Forces the runner to follow the configured order |
+| `obstacles[].pose/size` | Obstacle geometry for the scene and route probe |
+| `constraints.max_retries_per_object` | Maximum transfer-probe retries |
+| `stacking_v2.final_stack_xy` | Shared X-Y target for every stack layer |
+| `stacking_v2.final_order_bottom_to_top` | Bottom-to-top cube order |
+| `physical_execution.completion_policy` | Final acceptance rule |
 
-Pembacaan awalnya sederhana:
+The initial load is intentionally simple:
 
 ```python
 config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 ```
 
-Bukti: [`run_stacking_v2.run()`](ctamp/experiments/run_stacking_v2.py#L182-L195).
+See [`run_stacking_v2.run()`](ctamp/experiments/run_stacking_v2.py#L182-L195).
 
-Loader ini hanya memastikan YAML dapat dibaca menjadi data Python. Field wajib diakses pada tahap berikutnya, sehingga field hilang atau nama objek salah akan gagal saat dipakai.
+The loader only converts readable YAML into Python data. Required fields are accessed later, so missing fields or unknown object names fail when the pipeline uses them.
 
-## 2. YAML diubah menjadi preview safe-zone dan target stack
+## 2. From YAML to Safe-Zone Preview and Stack Targets
 
-`build_phase_configs()` membuat dua config turunan:
+`build_phase_configs()` creates two derived configurations:
 
-1. `safe_zone_preview.yaml`: susunan datar untuk preview atau rencana fallback di masa depan.
-2. `continuous_stack.yaml`: target stack yang benar-benar diberikan ke runner MuJoCo.
+1. `safe_zone_preview.yaml`: a flat arrangement for preview and possible future fallback logic.
+2. `continuous_stack.yaml`: the stack target passed to the MuJoCo runner.
 
-Bukti pembentukan kedua config ada di [`build_phase_configs()`](ctamp/experiments/run_stacking_v2.py#L119-L147).
+See [`build_phase_configs()`](ctamp/experiments/run_stacking_v2.py#L119-L147).
 
-Hal penting: safe-zone saat ini hanya ditulis sebagai preview. `run()` mengeksekusi `continuous_stack.yaml`, bukan `safe_zone_preview.yaml`.
+The safe zone is currently preview-only. `run()` executes `continuous_stack.yaml`, not `safe_zone_preview.yaml`.
 
 ```python
 stack_path = _write_preview_configs(output, safe_zone_config, stack_config)
@@ -153,66 +153,66 @@ continuous = run_scene_v2(
 )
 ```
 
-Bukti: [`run_stacking_v2.run()`](ctamp/experiments/run_stacking_v2.py#L191-L213).
+See [`run_stacking_v2.run()`](ctamp/experiments/run_stacking_v2.py#L191-L213).
 
-Jadi nama `safe_zone` belum berarti robot otomatis memindahkan kubus ke sana ketika stacking gagal.
+The name `safe_zone` therefore does not mean that the robot automatically moves a failed cube there.
 
-### Cara menghitung posisi safe-zone
+### Safe-Zone Position Calculation
 
-Untuk axis `x`, kubus ke-`i` mendapat:
+For the `x` axis, cube `i` receives:
 
 ```text
 x_i = origin_x + i * spacing
 y_i = origin_y
-z_i = table_z + tinggi_kubus_i / 2
+z_i = table_z + cube_height_i / 2
 ```
 
-Dengan `origin = [0.08, -0.50]` dan `spacing = 0.095`, `c6` berada di `x=0.08`, `c5` di `x=0.175`, dan seterusnya.
+With `origin = [0.08, -0.50]` and `spacing = 0.095`, `c6` is placed at `x=0.08`, `c5` at `x=0.175`, and so on.
 
-Bukti rumus ada di [`_safe_zone_positions()`](ctamp/experiments/run_stacking_v2.py#L48-L66).
+See [`_safe_zone_positions()`](ctamp/experiments/run_stacking_v2.py#L48-L66).
 
-### Cara menghitung posisi final stack
+### Final Stack Position Calculation
 
-Semua kubus memakai X-Y `[-0.30, -0.75]`. Tinggi pusat kubus dihitung dari permukaan yang tersedia:
+All cubes share X-Y `[-0.30, -0.75]`. Each cube center is calculated from the available supporting surface:
 
 ```text
-z_lantai_0 = table.z_top
-z_pusat_i  = z_lantai_i + tinggi_i / 2
-z_lantai_(i+1) = z_lantai_i + tinggi_i
+surface_z_0     = table.z_top
+center_z_i      = surface_z_i + height_i / 2
+surface_z_(i+1) = surface_z_i + height_i
 ```
 
-Bukti rumus ada di [`_stack_positions()`](ctamp/experiments/run_stacking_v2.py#L33-L45).
+See [`_stack_positions()`](ctamp/experiments/run_stacking_v2.py#L33-L45).
 
-Hasil untuk YAML bawaan:
+Targets generated by the default YAML:
 
-| Urutan | Kubus | Tinggi | Target pusat `[x, y, z]` |
+| Order | Cube | Height | Center target `[x, y, z]` |
 |---:|---|---:|---|
-| 1/6, dasar | `c6` | `0.098` | `[-0.30, -0.75, 0.849]` |
+| 1/6, bottom | `c6` | `0.098` | `[-0.30, -0.75, 0.849]` |
 | 2/6 | `c5` | `0.090` | `[-0.30, -0.75, 0.943]` |
 | 3/6 | `c4` | `0.082` | `[-0.30, -0.75, 1.029]` |
 | 4/6 | `c3` | `0.074` | `[-0.30, -0.75, 1.107]` |
 | 5/6 | `c2` | `0.066` | `[-0.30, -0.75, 1.177]` |
-| 6/6, puncak | `c1` | `0.058` | `[-0.30, -0.75, 1.239]` |
+| 6/6, top | `c1` | `0.058` | `[-0.30, -0.75, 1.239]` |
 
-Contoh untuk `c5`:
+For example, the `c5` center height is:
 
 ```text
 z_c5 = 0.80 + 0.098 + 0.090/2
      = 0.943
 ```
 
-Secara nominal tidak ada gap antara dua lapisan pertama:
+Nominally, there is no gap between the first two layers:
 
 ```text
 top(c6)    = 0.849 + 0.098/2 = 0.898
 bottom(c5) = 0.943 - 0.090/2 = 0.898
 ```
 
-Posisi ini dimasukkan sebagai `tidy_groups[].positions`. `generate_tidy_slots()` lalu menyalinnya menjadi `GoalSlot` per objek.
+These positions are stored in `tidy_groups[].positions`. `generate_tidy_slots()` copies each position into an object-specific `GoalSlot`.
 
-Bukti penyalinan posisi eksplisit ada di [`generate_tidy_slots()`](ctamp/simulation/scene.py#L43-L64).
+See [`generate_tidy_slots()`](ctamp/simulation/scene.py#L43-L64).
 
-Bentuk data yang benar-benar masuk ke `run_scene_v2` antara lain:
+The data passed to `run_scene_v2` includes:
 
 ```yaml
 task:
@@ -225,16 +225,16 @@ tidy_groups:
     positions:
       c6: [-0.30, -0.75, 0.849]
       c5: [-0.30, -0.75, 0.943]
-      # ... sampai c1
+      # ... through c1
 ```
 
-Config ini ditulis sebagai `continuous_stack.yaml` oleh [`_phase_config()`](ctamp/experiments/run_stacking_v2.py#L89-L116).
+`_phase_config()` writes this derived configuration to `continuous_stack.yaml`. See [`run_stacking_v2.py`](ctamp/experiments/run_stacking_v2.py#L89-L116).
 
-## 3. Bagaimana robot menentukan prioritas objek
+## 3. Object Ordering
 
-### Pada stacking: urutan wajib dari YAML
+### Stacking Uses the YAML Order
 
-`final_order_bottom_to_top` disalin menjadi `task.target_objects`. Karena `preserve_order: true`, pemilih objek selalu mengambil elemen pertama yang belum dikerjakan.
+`final_order_bottom_to_top` becomes `task.target_objects`. With `preserve_order: true`, the selector always takes the first remaining object.
 
 ```python
 def _next_object(pending: list[str]) -> str:
@@ -242,93 +242,91 @@ def _next_object(pending: list[str]) -> str:
         return pending[0]
 ```
 
-Bukti: [`_next_object()`](ctamp/experiments/run_scene.py#L376-L425).
+See [`_next_object()`](ctamp/experiments/run_scene.py#L376-L425).
 
-Urutannya adalah:
-
-```text
-c6 terbesar -> c5 -> c4 -> c3 -> c2 -> c1 terkecil
-```
-
-Ini lebih tepat disebut **urutan wajib stacking**, bukan prioritas yang ditemukan planner. Kode tidak menyortir `size_xyz`; jika urutan YAML salah, runner tetap mengikuti urutan itu.
-
-### Jika `preserve_order` dimatikan
-
-Untuk scene lain, runner menghitung skor:
+The order is:
 
 ```text
-score = panjang_transit + panjang_transfer
-      + 5000 jika transit gagal
-      + 3000 jika transfer gagal
-      + 200 jika transit bukan direct
-      + 200 jika transfer bukan direct
-      + 0.01 * urutan_awal
+c6 largest -> c5 -> c4 -> c3 -> c2 -> c1 smallest
 ```
 
-Objek dengan skor terkecil dipilih. Dengan Panda aktif, maksimal empat kandidat teratas juga dicoba untuk mencari grasp yang feasible.
+This is a **required stacking order**, not a priority discovered by the planner. The code does not sort `size_xyz`; an incorrect YAML order is still followed.
 
-Bukti scoring dan precheck IK ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L383-L425).
+### When `preserve_order` Is Disabled
 
-Mekanisme scoring ini tidak aktif pada YAML stacking karena `preserve_order` bernilai `true`.
-
-## 4. Dari YAML ke scene dan frame koordinat
-
-Repo ini tidak memakai ROS `tf` atau `tf2`. Semua pose scene dinyatakan langsung pada satu frame dunia MuJoCo.
-
-Pemetaan datanya:
+Other scenes use this score:
 
 ```text
-robot.base_xy + robot.base_z -> posisi body link0 pada world
-objects[].pose               -> posisi body cube_<id> pada world
-obstacles[].pose             -> posisi geom obstacle pada world
-GoalSlot.position            -> posisi site target pada world
+score = transit_length + transfer_length
+      + 5000 if transit fails
+      + 3000 if transfer fails
+      + 200 if transit is not direct
+      + 200 if transfer is not direct
+      + 0.01 * original_order
 ```
 
-Bukti penempatan Panda ada di [`MuJoCoSceneBuilder.build_xml()`](ctamp/simulation/mujoco_scene_builder.py#L28-L62).
+The object with the lowest score is selected. With an active Panda model, the runner also probes at most four leading candidates for a feasible grasp.
 
-Bukti penempatan obstacle, kubus, dan slot ada di [`mujoco_scene_builder.py`](ctamp/simulation/mujoco_scene_builder.py#L84-L164).
+See the scoring and IK precheck in [`run_scene.py`](ctamp/experiments/run_scene.py#L383-L425).
 
-Setelah XML dimuat, `mj_forward()` menghitung pose seluruh body dan site. `get_body_pose()` membaca `data.xpos` dan `data.xquat` dari MuJoCo.
+This scoring path is inactive for the stacking YAML because `preserve_order` is `true`.
 
-Bukti: [`MuJoCoBackend.load_model()`](ctamp/simulation/mujoco_backend.py#L24-L38) dan [`get_body_pose()`](ctamp/simulation/mujoco_backend.py#L49-L52).
+## 4. Scene Construction and Coordinate Frames
 
-### Transform relatif yang benar-benar ada
-
-Transform relatif dihitung ketika kubus perlu mengikuti tangan setelah grasp. Posisi dan rotasi kubus di frame tangan dihitung sebagai:
+This repository does not use ROS `tf` or `tf2`. Scene poses are expressed directly in one MuJoCo world frame.
 
 ```text
-p_cube_di_tangan = R_tangan^T * (p_cube_world - p_tangan_world)
-R_cube_di_tangan = R_tangan^T * R_cube_world
+robot.base_xy + robot.base_z -> link0 body position in world
+objects[].pose               -> cube_<id> body position in world
+obstacles[].pose             -> obstacle geom position in world
+GoalSlot.position            -> target site position in world
 ```
 
-Nilai ini dipakai untuk equality weld `carry_<object_id>` setelah kontak kedua jari tervalidasi.
+See Panda placement in [`MuJoCoSceneBuilder.build_xml()`](ctamp/simulation/mujoco_scene_builder.py#L28-L62).
 
-Bukti: [`PandaPhysicsExecutor.set_carry_constraint()`](ctamp/simulation/panda_physics.py#L120-L147).
+See obstacle, cube, and slot placement in [`mujoco_scene_builder.py`](ctamp/simulation/mujoco_scene_builder.py#L84-L164).
 
-Jadi alurnya bukan `YAML -> ROS TF -> IK`. Alur aktualnya adalah `pose world dari YAML -> target world MuJoCo -> IK`.
+After the XML is loaded, `mj_forward()` computes every body and site pose. `get_body_pose()` reads `data.xpos` and `data.xquat` from MuJoCo.
 
-## 5. Motion planning geometrik sebelum IK
+See [`MuJoCoBackend.load_model()`](ctamp/simulation/mujoco_backend.py#L24-L38) and [`get_body_pose()`](ctamp/simulation/mujoco_backend.py#L49-L52).
 
-Untuk setiap objek, runner membuat dua query:
+### Relative Transform Used During Carry
+
+A relative transform is calculated when a grasped cube must follow the hand:
+
+```text
+p_cube_in_hand = R_hand^T * (p_cube_world - p_hand_world)
+R_cube_in_hand = R_hand^T * R_cube_world
+```
+
+The runtime stores this transform in the `carry_<object_id>` equality weld after bilateral finger contact has been validated.
+
+See [`PandaPhysicsExecutor.set_carry_constraint()`](ctamp/simulation/panda_physics.py#L120-L147).
+
+The actual flow is not `YAML -> ROS TF -> IK`. It is `world pose from YAML -> MuJoCo world target -> IK`.
+
+## 5. Geometric Motion Planning Before IK
+
+For each object, the runner issues two queries:
 
 ```text
 transit : current_xy -> object.pose[:2]
 transfer: object.pose[:2] -> GoalSlot.position[:2]
 ```
 
-Bukti query ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L427-L457).
+See [`run_scene.py`](ctamp/experiments/run_scene.py#L427-L457).
 
-Setelah objek sukses, `current_xy` planner diubah menjadi X-Y slot. Ini hanya state abstrak probe 2-D, bukan pose end-effector fisik; arm fisik justru dikembalikan ke pose aman/home.
+After a successful object, the 2-D planner's `current_xy` becomes the slot X-Y. This is an abstract probe state, not the physical end-effector pose. The physical arm returns to a safe or home pose.
 
-Bukti: [`run_scene.py`](ctamp/experiments/run_scene.py#L306-L310) dan [`run_scene.py`](ctamp/experiments/run_scene.py#L514-L520).
+See [`run_scene.py`](ctamp/experiments/run_scene.py#L306-L310) and [`run_scene.py`](ctamp/experiments/run_scene.py#L514-L520).
 
-`MuJoCoMotionPlanner.plan_xy()` mengubah hasil probe menjadi `MotionPlan` berisi status, waypoint, panjang, clearance, route type, dan waktu planning.
+`MuJoCoMotionPlanner.plan_xy()` converts the probe result into a `MotionPlan` with status, waypoints, length, clearance, route type, and planning time.
 
-Bukti: [`MuJoCoMotionPlanner.plan_xy()`](ctamp/motion_planning/mujoco.py#L16-L38).
+See [`MuJoCoMotionPlanner.plan_xy()`](ctamp/motion_planning/mujoco.py#L16-L38).
 
-### Cara obstacle diperbesar
+### Obstacle Inflation
 
-Wall diperlakukan sebagai rectangle 2-D yang diberi clearance `c = 0.055 m`:
+The wall is treated as a 2-D rectangle inflated by clearance `c = 0.055 m`:
 
 ```text
 x_min = x - size_x/2 - c
@@ -337,40 +335,40 @@ y_min = y - size_y/2 - c
 y_max = y + size_y/2 + c
 ```
 
-Bukti: [`MotionProbe._inflated_rect()`](ctamp/simulation/scene.py#L128-L138).
+See [`MotionProbe._inflated_rect()`](ctamp/simulation/scene.py#L128-L138).
 
-Untuk wall YAML di `[0.00, -0.08]` dengan size `[0.08, 0.10]`, rectangle hasil inflasi adalah:
+For the YAML wall at `[0.00, -0.08]` with size `[0.08, 0.10]`, the inflated rectangle is:
 
 ```text
 x = [-0.095, 0.095]
 y = [-0.185, 0.025]
 ```
 
-### Cara route dipilih
+### Route Selection
 
-1. Coba garis langsung.
-2. Jika terhalang, buat kandidat di dua sisi wall.
-3. Buang kandidat yang keluar meja, di luar reach, atau memotong rectangle.
-4. Pilih kandidat valid dengan panjang polyline terkecil.
+1. Try a direct line.
+2. If blocked, generate candidates on both sides of the wall.
+3. Reject candidates outside the table, outside reach, or intersecting the rectangle.
+4. Select the shortest valid polyline.
 
-Panjang route adalah jumlah jarak Euclidean setiap segmen:
+Route length is the sum of Euclidean segment lengths:
 
 ```text
 L = distance(p0, p1) + distance(p1, p2) + ...
 ```
 
-Bukti direct/corridor selection ada di [`MotionProbe.probe()`](ctamp/simulation/scene.py#L159-L205).
+See [`MotionProbe.probe()`](ctamp/simulation/scene.py#L159-L205).
 
-### Contoh nyata: transit menuju `c6`
+### Worked Example: Transit to `c6`
 
-Home X-Y dihitung dari base, reach minimum, dan offset `0.02`:
+Home X-Y is derived from the base, minimum reach, and a `0.02` offset:
 
 ```text
 home_xy = [-0.42 + 0.25 + 0.02, -0.08]
         = [-0.15, -0.08]
 ```
 
-Target `c6` dari YAML adalah `[0.109, 0.3708]`. Garis langsung memotong wall, sehingga kandidat `left_corridor` menjadi:
+The YAML target for `c6` is `[0.109, 0.3708]`. The direct line intersects the wall, so `left_corridor` becomes:
 
 ```text
 [-0.15, -0.08]
@@ -379,69 +377,69 @@ Target `c6` dari YAML adalah `[0.109, 0.3708]`. Garis langsung memotong wall, se
 -> [ 0.109, 0.3708]
 ```
 
-Panjangnya:
+Its length is:
 
 ```text
 L = 0.115 + 0.259 + 0.3358
   = 0.7098 m
 ```
 
-Nilai `0.035` berasal dari sisi atas rectangle `0.025` ditambah margin corridor `0.01`.
+The value `0.035` is the rectangle's upper side at `0.025` plus a `0.01` corridor margin.
 
-Bukti home X-Y ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L84-L90). Rumus corridor dan margin ada di [`scene.py`](ctamp/simulation/scene.py#L165-L197).
+See home X-Y in [`run_scene.py`](ctamp/experiments/run_scene.py#L84-L90). See the corridor calculation in [`scene.py`](ctamp/simulation/scene.py#L165-L197).
 
-Jika transfer gagal, `_probe_transfer()` mengulang query sampai `max_retries_per_object`. Query geometrik ini deterministik; retry saat ini tidak membuat kandidat baru.
+If transfer fails, `probe_transfer()` repeats the query up to `max_retries_per_object`. The geometric query is deterministic, so retries currently do not generate new candidates.
 
-Bukti retry ada di [`probe_transfer()`](ctamp/experiments/scene_helpers.py#L54-L69).
+See [`probe_transfer()`](ctamp/experiments/scene_helpers.py#L54-L69).
 
-## 6. Dari target dunia ke IK dan trajectory joint
+## 6. From World Targets to IK and Joint Trajectories
 
-Motion probe 2-D dan IK Panda tidak boleh dianggap sebagai satu hitungan yang sama.
+The 2-D motion probe and Panda IK are different calculations.
 
-Pada physical stacking, probe 2-D memberi diagnosis route. Executor fisik lalu memakai pose kubus aktual dari MuJoCo dan posisi slot untuk membuat grasp, lift, dan place joint path.
+In physical stacking, the 2-D probe supplies route diagnostics. The physical executor uses the cube's current MuJoCo pose and the goal slot to build grasp, lift, and place joint paths.
 
-Bukti entry point physical pick-place ada di [`_execute_physical_pick_place()`](ctamp/experiments/run_scene.py#L170-L310).
+See [`_execute_physical_pick_place()`](ctamp/experiments/run_scene.py#L170-L310).
 
-Physical path saat ini tidak mengubah waypoint `MotionPlan` X-Y menjadi joint trajectory. Karena itu, hasil probe 2-D dan hasil IK/RRT fisik harus dibaca sebagai dua bukti terpisah.
+The physical path does not convert the X-Y `MotionPlan` waypoints into a joint trajectory. The geometric probe and physical IK/RRT results must therefore be treated as separate evidence.
 
-Pada mode preview IK tanpa physical executor, waypoint X-Y dibuat rapat lalu ditambah Z tetap sebelum diberikan ke `solve_path()`.
+In IK-preview mode without a physical executor, X-Y waypoints are densified and assigned a fixed Z before being passed to `solve_path()`.
 
 ```python
 transit_targets = _dense_xyz(transit.waypoints, 0.95)[1:]
 transfer_targets = _dense_xyz(motion.waypoints, 0.938)[1:]
 ```
 
-Bukti: [`_execute_ik_preview()`](ctamp/experiments/run_scene.py#L312-L374).
+See [`_execute_ik_preview()`](ctamp/experiments/run_scene.py#L312-L374).
 
-### Hitungan IK yang dipakai
+### IK Calculation
 
-Target dan gripper sama-sama berada pada frame dunia. Error posisi adalah:
+The target and gripper are both expressed in the world frame. Position error is:
 
 ```text
 e_pos = p_target_world - p_gripper_world
 ```
 
-Jika orientasi diberikan, error rotasinya:
+When orientation is supplied, rotation error is:
 
 ```text
 e_rot = 0.5 * sum(cross(R_current[:, i], R_target[:, i]))
 ```
 
-Error dan Jacobian gabungannya memakai bobot orientasi `0.35`:
+The combined error and Jacobian use orientation weight `0.35`:
 
 ```text
 error = [e_pos; 0.35 * e_rot]
 J     = [J_pos; 0.35 * J_rot]
 ```
 
-Solver memakai damped least squares:
+The solver uses damped least squares:
 
 ```text
 delta_q = J^T * inverse(J * J^T + damping * I) * error
 q_next  = clip(q_current + step_size * delta_q, q_min, q_max)
 ```
 
-Default pentingnya:
+Important defaults:
 
 ```text
 tolerance      = 0.002 m
@@ -450,25 +448,25 @@ step_size      = 0.6
 max_iterations = 250
 ```
 
-`0.002 m` adalah toleransi posisi. Jika orientasi dipakai, terminasi juga mensyaratkan `norm(e_rot) <= orientation_tolerance`.
+The `0.002 m` value is the position tolerance. With an orientation target, termination also requires `norm(e_rot) <= orientation_tolerance`.
 
-Default toleransi orientasi adalah `0.035 rad`. Call site dapat mengubahnya: lift memakai `0.10`, kandidat pregrasp physical `0.35`, dan final grasp `0.08`.
+The default orientation tolerance is `0.035 rad`. Call sites override it: lift uses `0.10`, physical pregrasp candidates use `0.35`, and the final grasp uses `0.08`.
 
-Bukti lengkap ada di [`PandaIKSolver.solve()`](ctamp/simulation/panda_ik.py#L103-L175).
+See [`PandaIKSolver.solve()`](ctamp/simulation/panda_ik.py#L103-L175).
 
-Bukti toleransi per tahap ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L198-L229) dan [`plan_physical_grasp()`](ctamp/simulation/panda_ik.py#L422-L491).
+See per-stage tolerances in [`run_scene.py`](ctamp/experiments/run_scene.py#L198-L229) and [`plan_physical_grasp()`](ctamp/simulation/panda_ik.py#L422-L491).
 
-Jika satu seed gagal atau collision, solver mencoba seed lain. Hasil baru diterima jika residual cukup kecil dan tidak ada collision robot.
+If a seed fails or collides, the solver tries other seeds. A result is accepted only when the residual is small enough and the robot is collision-free.
 
-Bukti multi-start ada di [`solve_collision_free()`](ctamp/simulation/panda_ik.py#L177-L224).
+See [`solve_collision_free()`](ctamp/simulation/panda_ik.py#L177-L224).
 
-### Grasp, lift, dan place
+### Grasp, Lift, and Place
 
-Untuk physical grasp, solver mencoba pendekatan `top`, `side_pos_x`, `side_neg_x`, `side_pos_y`, lalu `side_neg_y`.
+For a physical grasp, the solver tries `top`, `side_pos_x`, `side_neg_x`, `side_pos_y`, and `side_neg_y` approaches.
 
-Bukti kandidat grasp ada di [`plan_physical_grasp()`](ctamp/simulation/panda_ik.py#L422-L495).
+See [`plan_physical_grasp()`](ctamp/simulation/panda_ik.py#L422-L495).
 
-Setelah grasp ditemukan:
+After a grasp is found:
 
 ```text
 lift_target     = gripper_position + [0, 0, 0.14]
@@ -476,9 +474,9 @@ place_target    = slot.position + [0, 0, 0.06]
 preplace_target = place_target + [0, 0, 0.14]
 ```
 
-Bukti target lift/place ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L198-L229).
+See [`run_scene.py`](ctamp/experiments/run_scene.py#L198-L229).
 
-Contoh target grasp `c6` bila style `top` dipilih:
+For `c6` with a top grasp:
 
 ```text
 cube_world     = [0.109, 0.3708, 0.849]
@@ -488,7 +486,7 @@ pregrasp       = grasp_target - [0, 0, -1] * 0.14
                = [0.109, 0.3708, 1.009]
 ```
 
-Untuk slot dasar `c6`:
+For the bottom `c6` slot:
 
 ```text
 slot           = [-0.30, -0.75, 0.849]
@@ -498,54 +496,54 @@ preplace       = place_target + [0, 0, 0.14]
                = [-0.30, -0.75, 1.049]
 ```
 
-Rumus grasp target dan pregrasp ada di [`plan_physical_grasp()`](ctamp/simulation/panda_ik.py#L422-L491).
+See the grasp-target and pregrasp calculations in [`plan_physical_grasp()`](ctamp/simulation/panda_ik.py#L422-L491).
 
-Setiap target Cartesian diubah menjadi kandidat joint. Jika garis lurus pada joint space collision, `plan_joint_rrt()` menjalankan bidirectional RRT-Connect.
+Each Cartesian target becomes a joint candidate. If the direct joint-space segment collides, `plan_joint_rrt()` runs bidirectional RRT-Connect.
 
-Bukti fallback tersebut ada di [`solve_path()`](ctamp/simulation/panda_ik.py#L603-L679) dan [`plan_joint_rrt()`](ctamp/simulation/panda_ik.py#L681-L759).
+See [`solve_path()`](ctamp/simulation/panda_ik.py#L603-L679) and [`plan_joint_rrt()`](ctamp/simulation/panda_ik.py#L681-L759).
 
-Planning IK/RRT memakai backend MuJoCo terpisah dari backend eksekusi. Karena itu, perubahan `qpos` saat search tidak menggerakkan arm live.
+IK/RRT planning uses a MuJoCo backend separate from physical execution. Search-time `qpos` changes therefore do not move the live arm.
 
-Bukti pembuatan backend terpisah ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L111-L130).
+See backend separation in [`run_scene.py`](ctamp/experiments/run_scene.py#L111-L130).
 
-### Eksekusi fisik
+### Physical Execution
 
-Joint waypoint dikirim ke actuator dengan interpolasi smoothstep. Jumlah sub-target dihitung dari rasio delta joint maksimum terhadap `max_joint_step`.
+Joint waypoints are sent to actuators with smoothstep interpolation. The number of subtargets is based on the ratio of maximum joint delta to `max_joint_step`.
 
-`max_joint_step` menentukan jumlah sub-target; karena interpolasinya smoothstep, nilai itu bukan jaminan keras bahwa selisih setiap command selalu lebih kecil darinya.
+Because interpolation uses smoothstep, `max_joint_step` controls the subtarget count but is not a strict upper bound on every commanded delta.
 
-Bukti: [`follow_joint_path()`](ctamp/simulation/panda_physics.py#L85-L104).
+See [`follow_joint_path()`](ctamp/simulation/panda_physics.py#L85-L104).
 
-Akuisisi diterima software jika:
+Software accepts acquisition when:
 
-1. Jari kiri menyentuh kubus.
-2. Jari kanan menyentuh kubus.
-3. Arm berhasil mengikuti lift.
-4. Kubus naik minimal `0.04 m`.
+1. The left finger touches the cube.
+2. The right finger touches the cube.
+3. The arm follows the lift path.
+4. The cube rises by at least `0.04 m`.
 
-Bukti gate grasp/lift ada di [`validate_grasp_and_lift()`](ctamp/simulation/panda_physics.py#L203-L243).
+See [`validate_grasp_and_lift()`](ctamp/simulation/panda_physics.py#L203-L243).
 
-Setelah kontak bilateral terdeteksi, runtime mengaktifkan equality weld sebelum lift. Mekanisme ini adalah **contact-gated kinematic carry**, bukan pembuktian force-closure grasp yang mandiri.
+After bilateral contact, the runtime activates an equality weld before lifting. This is **contact-gated kinematic carry**, not an independent proof of force closure.
 
-YAML juga menyatakan `require_force_closure: false`. Field itu belum diperiksa sebagai gate runtime.
+The YAML also sets `require_force_closure: false`. That field is not currently enforced as a runtime gate.
 
-`close_gripper()` mengirim setengah total bukaan ke actuator satu jari. Untuk `c6`, `grip_target_width=0.078` menghasilkan target actuator `0.039 m`.
+`close_gripper()` sends half of the total opening to the single-finger actuator. For `c6`, `grip_target_width=0.078` produces an actuator target of `0.039 m`.
 
-Bukti: [`close_gripper()`](ctamp/simulation/panda_physics.py#L106-L118).
+See [`close_gripper()`](ctamp/simulation/panda_physics.py#L106-L118).
 
-Setelah sampai target, weld dilepas, gripper dibuka, simulasi dibiarkan settle, lalu posisi akhir kubus dibaca kembali dari MuJoCo.
+At the target, the weld is released, the gripper opens, the simulation settles, and the final cube pose is read from MuJoCo.
 
-Bukti release dan pengukuran placement ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L268-L296).
+See placement release and measurement in [`run_scene.py`](ctamp/experiments/run_scene.py#L268-L296).
 
-## 7. Kapan satu objek dan seluruh challenge dianggap berhasil
+## 7. Success Criteria
 
-### Keberhasilan per objek
+### Per-Object Success
 
-Ada tiga bentuk gate per objek:
+There are three per-object gates:
 
-1. Panda + physical executor: status mengikuti IK dan eksekusi fisik.
-2. Panda tanpa physical executor: transit 2-D, transfer 2-D, dan IK preview harus berhasil.
-3. Panda proxy tanpa IK solver: transit dan transfer 2-D harus berhasil; nilai IK default tidak menambah validasi fisik.
+1. Panda + physical executor: success follows IK and physical execution.
+2. Panda without a physical executor: 2-D transit, 2-D transfer, and IK preview must all succeed.
+3. Panda proxy without IK: 2-D transit and transfer must succeed; the default IK value adds no physical validation.
 
 ```python
 object_success = (
@@ -555,32 +553,32 @@ object_success = (
 )
 ```
 
-Bukti: [`run_scene.py`](ctamp/experiments/run_scene.py#L477-L498).
+See [`run_scene.py`](ctamp/experiments/run_scene.py#L477-L498).
 
-Akibatnya, physical execution dapat berhasil walau `route_type` probe 2-D tercatat `failed`. Ini bukan kontradiksi: physical IK/RRT adalah validator utama pada mode tersebut.
+Physical execution may succeed even when the 2-D probe records `route_type: failed`. This is not a contradiction because physical IK/RRT is the primary validator in that mode.
 
-### Keberhasilan seluruh stacking
+### Whole-Stack Success
 
-YAML memakai:
+The YAML uses:
 
 ```yaml
 completion_policy: strict
 minimum_completion_ratio: 1.0
 ```
 
-Pada policy `strict`, semua enam `per_object_result[].success` harus `true`.
+Under `strict`, all six `per_object_result[].success` values must be `true`.
 
-Bukti perhitungan completion ada di [`completion_status()`](ctamp/experiments/scene_helpers.py#L72-L92).
+See [`completion_status()`](ctamp/experiments/scene_helpers.py#L72-L92).
 
-Gate terakhir adalah:
+The final gate is:
 
 ```text
 solution_found = accepted_completion AND tmm_search_success
 ```
 
-Bukti: [`run_scene.py`](ctamp/experiments/run_scene.py#L521-L543).
+See [`run_scene.py`](ctamp/experiments/run_scene.py#L521-L543).
 
-Checklist hasil yang diterima software saat ini:
+The current software acceptance checklist is:
 
 ```text
 completed_objects == 6
@@ -592,64 +590,64 @@ continuous_stack.solution_found == true
 metrics.json solution_found == true
 ```
 
-### Arti “stacking sempurna” perlu dibatasi
+### Limits of “Perfect Stacking”
 
-`physical_tidy_success` saat ini hanya memeriksa error X-Y maksimal `0.07 m`:
+`physical_tidy_success` currently checks only whether X-Y error is at most `0.07 m`:
 
 ```text
 norm(placement_error_xy) <= 0.07
 ```
 
-Bukti: [`run_scene.py`](ctamp/experiments/run_scene.py#L286-L296).
+See [`run_scene.py`](ctamp/experiments/run_scene.py#L286-L296).
 
-Belum ada gate eksplisit untuk error Z, kemiringan kubus, kontak antarlapisan, pusat massa, atau kestabilan tower setelah semua kubus selesai.
+There is no explicit gate for Z error, cube tilt, inter-layer contact, center of mass, or tower stability after all cubes have been placed.
 
-Karena itu, `solution_found=true` berarti challenge diterima oleh aturan software saat ini. Nilai itu belum menjadi bukti formal bahwa tower stabil sempurna.
+`solution_found=true` therefore means that the current software rules accepted the challenge. It is not formal proof of a perfectly stable tower.
 
-Field `challenge.*` pada YAML juga masih metadata. Perilaku obstacle berasal dari `obstacles`, MotionProbe, collision check IK/RRT, dan physics; flag `side_corridors_required` tidak diperiksa sebagai gate tersendiri.
+The YAML `challenge.*` fields are also metadata. Obstacle behavior comes from `obstacles`, MotionProbe, IK/RRT collision checks, and physics. `side_corridors_required` is not enforced as a separate gate.
 
-## 8. Mekanisme TMM
+## 8. Task-Motion Multigraph
 
-TMM berarti **Task-Motion Multigraph**. Secara model, vertex memuat state robot/workspace dan edge memuat action, joint-space, motion plan, serta cost.
+TMM means **Task-Motion Multigraph**. A vertex holds robot and workspace state. An edge holds an action, joint space, motion plan, and cost.
 
-Disebut multigraph karena dua vertex dapat memiliki beberapa edge paralel, misalnya alternatif joint-space untuk action yang sama.
+It is a multigraph because two vertices can have multiple parallel edges, such as alternative joint spaces for the same symbolic action.
 
-Bukti struktur data ada di [`TaskMotionMultigraph`](ctamp/tmm/multigraph.py#L12-L37) dan model [`Vertex`/`Edge`](ctamp/domain/models.py#L67-L82).
+See [`TaskMotionMultigraph`](ctamp/tmm/multigraph.py#L12-L37) and the [`Vertex`/`Edge`](ctamp/domain/models.py#L67-L82) models.
 
-Pada ordered TMM aktif, semua vertex masih memakai placeholder `RobotState` dan `WorkspaceState` yang sama. Label `root`, `pick`, `place`, dan `goal` adalah milestone, belum snapshot state aktual yang berbeda.
+In the active ordered TMM, every vertex still shares placeholder `RobotState` and `WorkspaceState` objects. `root`, `pick`, `place`, and `goal` are milestones, not distinct state snapshots.
 
-Field seperti `holding_object_id` dan pose workspace tidak diperbarui dari vertex ke vertex pada builder aktif ini.
+Fields such as `holding_object_id` and workspace poses are not updated between vertices by the active builder.
 
-Bukti: [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L180).
+See [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L180).
 
-### Kapan TMM dibuat
+### When the TMM Is Built
 
-Pada runtime stacking aktif, urutannya adalah:
+The active stacking runtime follows this order:
 
 ```text
-YAML menentukan order
+YAML fixes order
 -> motion probe
 -> IK/RRT
 -> physical execution
--> semua hasil objek terkumpul
+-> collect all object results
 -> build_ordered_tmm
 -> TMMAStar.search
 ```
 
-Buktinya, loop objek berakhir lebih dahulu. TMM baru dibangun pada [`run_scene.py`](ctamp/experiments/run_scene.py#L427-L530).
+The object loop finishes before the TMM is built in [`run_scene.py`](ctamp/experiments/run_scene.py#L427-L530).
 
-Jadi TMM saat ini tidak memilih `c6` lebih dahulu, tidak menghasilkan target stack, dan tidak menggerakkan Panda.
+The current TMM does not select `c6` first, generate the stack target, or move the Panda.
 
-### Cara ordered TMM dibuat
+### Ordered TMM Construction
 
-Untuk setiap objek dibuat dua vertex:
+Each object creates two vertices:
 
 ```text
 pick_<object_id>
 place_<object_id>
 ```
 
-Graf enam kubus berbentuk:
+The six-cube graph is:
 
 ```mermaid
 flowchart LR
@@ -659,65 +657,65 @@ flowchart LR
     L1 --> G["goal"]
 ```
 
-Setiap hubungan memiliki dua edge paralel:
+Each connection has two parallel edges:
 
 ```text
 left_arm
 left_arm_redundant
 ```
 
-Keduanya saat ini berisi tujuh joint Panda yang sama. Nama `redundant` belum mewakili dimensi joint yang berbeda.
+Both currently contain the same seven Panda joints. The `redundant` name does not yet represent a different joint-space dimension.
 
-Ordered builder juga memasang objek `motion` yang sama pada edge transit dan transfer. Dictionary `motions` saat ini berisi hasil transfer, sedangkan transit asli tidak diberikan ke builder.
+The builder also attaches the same `motion` object to transit and transfer edges. The `motions` dictionary contains transfer results; the actual transit plan is not passed to the builder.
 
-Karena cost transit tetap nol, detail ini tidak mengubah cost A*. Namun pembaca tidak boleh menganggap edge transit TMM menyimpan motion transit fisik yang sebenarnya.
+Transit cost is zero, so this does not change the A* cost. However, a TMM transit edge should not be interpreted as containing the actual physical transit motion.
 
-Cost yang diberikan:
-
-```text
-cost transit  = 0
-cost transfer = motion.length, jika motion sukses
-cost transfer = 1_000_000, jika motion gagal
-cost done     = 0
-```
-
-Bukti seluruh generator aktif ada di [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L232).
-
-Untuk `n` objek:
+Assigned costs are:
 
 ```text
-jumlah vertex = 2n + 2
-jumlah edge   = 4n + 2
+transit cost  = 0
+transfer cost = motion.length if motion succeeds
+transfer cost = 1_000_000 if motion fails
+done cost     = 0
 ```
 
-Untuk enam kubus, hasilnya `14` vertex dan `26` edge.
+See [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L232).
 
-### Cara A* bekerja
+For `n` objects:
 
-A* menyimpan kandidat dalam priority queue dengan:
+```text
+vertex count = 2n + 2
+edge count   = 4n + 2
+```
+
+Six cubes produce `14` vertices and `26` edges.
+
+### A* Search
+
+A* stores candidates in a priority queue:
 
 ```text
 g_child = g_parent + edge.cost
 f_child = g_child + heuristic(child)
 ```
 
-Node dengan `f` terkecil dibuka lebih dahulu. Search selesai ketika vertex `goal` ditemukan.
+The node with the smallest `f` is expanded first. Search succeeds when it reaches a `goal` vertex.
 
-Bukti implementasi ada di [`TMMAStar.search()`](ctamp/search/tmm_astar.py#L122-L203).
+See [`TMMAStar.search()`](ctamp/search/tmm_astar.py#L122-L203).
 
-Heuristic default adalah nol. Pada runtime ini A* praktis menjadi uniform-cost search pada satu ordered branch.
+The default heuristic is zero. In this runtime, A* is effectively uniform-cost search over one ordered branch.
 
-Bukti default heuristic ada di [`TMMAStar.__init__()`](ctamp/search/tmm_astar.py#L107-L120).
+See [`TMMAStar.__init__()`](ctamp/search/tmm_astar.py#L107-L120).
 
-`TMMAStar()` juga memakai `MockVisitor` secara default. Search aktif tidak memanggil motion planner atau IK; ia hanya membaca edge dan cost yang sudah dibuat.
+`TMMAStar()` also uses `MockVisitor` by default. The active search does not call the motion planner or IK; it reads existing edges and costs.
 
-Edge gagal tetap ada dengan cost `1_000_000`, sehingga A* masih dapat mencapai goal. Pada non-physical mode, completion menahan motion gagal karena objek ikut gagal.
+A failed edge remains in the graph with cost `1_000_000`, so A* can still reach the goal. In non-physical mode, completion rejects the failed motion because the object also fails.
 
-Pada physical mode, probe 2-D boleh gagal tetapi objek tetap lolos bila eksekusi fisik berhasil. Jadi high-cost TMM edge juga tidak otomatis menggagalkan `solution_found`.
+In physical mode, an object may pass through physical execution even when the 2-D probe fails. A high-cost TMM edge therefore does not automatically make `solution_found` false.
 
-### Apa yang dihasilkan TMM
+### TMM Outputs
 
-TMM dibuat di memory dan tidak ditulis sebagai file graf. Runtime hanya menulis:
+The TMM exists in memory and is not serialized as a graph. The runtime writes only:
 
 ```text
 tmm_vertices
@@ -725,23 +723,23 @@ tmm_edges
 expanded_vertices
 ```
 
-`final_plan.json` berasal dari `plan_actions` yang dikumpulkan selama loop, bukan dari `search_result.path_edges`.
+`final_plan.json` comes from `plan_actions` collected during the object loop, not from `search_result.path_edges`.
 
-`metrics.total_cost` juga bukan `search_result.cost`. Metrics menjumlahkan panjang transit dan transfer objek yang sukses; cost hasil search TMM tidak diserialisasi.
+`metrics.total_cost` is also not `search_result.cost`. It sums transit and transfer lengths for successful objects; the TMM search cost is not serialized.
 
-Bukti pengumpulan action ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L477-L513), sedangkan penulisannya ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L569-L592).
+See action collection in [`run_scene.py`](ctamp/experiments/run_scene.py#L477-L513) and output writing in [`run_scene.py`](ctamp/experiments/run_scene.py#L569-L592).
 
-### TMM generik versus TMM stacking aktif
+### Generic TMM vs. Active Stacking TMM
 
-Repo juga memiliki `SymbolicTaskPlanner` dan `TMMGraphBuilder` generik untuk memperluas alternatif task/joint-space.
+The repository also includes generic `SymbolicTaskPlanner` and `TMMGraphBuilder` modules for expanding task and joint-space alternatives.
 
-Namun runner stacking saat ini memakai `build_ordered_tmm()` khusus. Jangan membaca modul generik seolah ia sedang menentukan urutan pada run stacking.
+The stacking runner uses the specialized `build_ordered_tmm()`. The generic modules should not be interpreted as selecting the order in active stacking runs.
 
-Rancangan generik dapat dilihat di [`ctamp/planning/symbolic.py`](ctamp/planning/symbolic.py) dan [`ctamp/tmm/builder.py`](ctamp/tmm/builder.py).
+See [`ctamp/planning/symbolic.py`](ctamp/planning/symbolic.py) and [`ctamp/tmm/builder.py`](ctamp/tmm/builder.py).
 
-## 9. Output dan cara membuktikan hasil
+## 9. Outputs and Result Verification
 
-Run stacking menulis:
+A stacking run writes:
 
 ```text
 runs/stacking_v2/
@@ -757,37 +755,37 @@ runs/stacking_v2/
     `-- OBSERVATION.md
 ```
 
-Bukti output wrapper ada di [`run_stacking_v2.py`](ctamp/experiments/run_stacking_v2.py#L150-L213).
+See wrapper outputs in [`run_stacking_v2.py`](ctamp/experiments/run_stacking_v2.py#L150-L213).
 
-Bukti output runner scene ada di [`run_scene.py`](ctamp/experiments/run_scene.py#L569-L617).
+See scene-runner outputs in [`run_scene.py`](ctamp/experiments/run_scene.py#L569-L617).
 
-Urutan pemeriksaan yang disarankan:
+Recommended verification order:
 
-1. Buka `stacking_plan.json` untuk memastikan urutan dan target Z benar.
-2. Buka `continuous_stack/metrics.json` untuk diagnosis per objek.
-3. Periksa `physical_grip_success`, `physical_lift_height`, `physical_tidy_success`, dan `placement_error`.
-4. Pastikan `failed_objects` kosong dan completion strict bernilai `1.0`.
-5. Terakhir, periksa `solution_found` pada `metrics.json` terluar.
+1. Open `stacking_plan.json` and confirm the order and Z targets.
+2. Open `continuous_stack/metrics.json` for per-object diagnostics.
+3. Check `physical_grip_success`, `physical_lift_height`, `physical_tidy_success`, and `placement_error`.
+4. Confirm that `failed_objects` is empty and strict completion is `1.0`.
+5. Check `solution_found` in the outer `metrics.json`.
 
-`challenge_ablation.json` menjelaskan route 2-D direct/corridor. File itu bukan bukti kestabilan tower fisik.
+`challenge_ablation.json` describes direct and corridor routes in the 2-D probe. It is not evidence of physical tower stability.
 
-## 10. Bukti otomatis yang tersedia
+## 10. Automated Evidence
 
-Tes `test_stacking_v2_builds_placeholder_then_large_to_small_stack` membuktikan:
+`test_stacking_v2_builds_placeholder_then_large_to_small_stack` verifies:
 
-- urutan `c6 -> ... -> c1`;
-- `preserve_order` aktif;
-- ukuran `c6` lebih besar dari `c1`;
-- target `c6` berada di bawah `c1`;
-- enam slot berhasil dibuat.
+- the `c6 -> ... -> c1` order;
+- active `preserve_order`;
+- `c6` is larger than `c1`;
+- the `c6` target is below the `c1` target;
+- all six slots are generated.
 
-Bukti: [`tests/test_migrated_pipeline.py`](tests/test_migrated_pipeline.py#L43-L70).
+See [`tests/test_migrated_pipeline.py`](tests/test_migrated_pipeline.py#L43-L70).
 
-Golden dry-run membuktikan urutan serta posisi safe-zone/final `c6` yang dihasilkan config bawaan.
+The golden dry-run verifies the order and the generated safe-zone and final position for `c6`.
 
-Bukti: [`tests/test_golden_regression.py`](tests/test_golden_regression.py#L42-L60).
+See [`tests/test_golden_regression.py`](tests/test_golden_regression.py#L42-L60).
 
-Jalankan tes dokumentasi alur ini dengan:
+Run the relevant tests with:
 
 ```bash
 python3 -m pytest -q tests/test_migrated_pipeline.py
@@ -796,11 +794,11 @@ python3 -m pytest -q \
   -m simulation
 ```
 
-Tes otomatis saat ini memverifikasi pembentukan urutan dan target. Ia belum menjadi regression test penuh untuk kestabilan fisik tower enam kubus.
+The current automated tests verify ordering and target generation. They are not full regression tests for the physical stability of a six-cube tower.
 
-## Entry point lain
+## Other Entry Points
 
-Grouped-tidy dari YAML:
+Grouped tidy from YAML:
 
 ```bash
 python3 -m cli.run_simulation \
@@ -808,7 +806,7 @@ python3 -m cli.run_simulation \
   --output runs/example_yaml
 ```
 
-Grouped-tidy dari context Markdown:
+Grouped tidy from a Markdown context:
 
 ```bash
 python3 -m cli.run_simulation \
@@ -816,7 +814,7 @@ python3 -m cli.run_simulation \
   --output runs/example_context
 ```
 
-Performance path v2:
+Performance-oriented v2 path:
 
 ```bash
 python3 -m cli.run_simulation_v2 \
@@ -824,6 +822,6 @@ python3 -m cli.run_simulation_v2 \
   --output runs/example_v2
 ```
 
-Jika `--output` tidak diberikan, CLI menulis artifact ke folder bertimestamp di `runs/`.
+If `--output` is omitted, the CLI writes artifacts to a timestamped directory under `runs/`.
 
-Runner TaskPlan/OMPL/adaptive-cache lama sudah dihapus. Runtime aktif memakai modul `ctamp.*` yang dijelaskan di atas.
+The legacy TaskPlan/OMPL/adaptive-cache runner has been removed. The active runtime uses the `ctamp.*` modules described above.
