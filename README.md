@@ -8,32 +8,44 @@ Sections 1-3 cover the YAML input, targets, and ordering. Sections 4-7 cover coo
 
 ## Three Things to Understand First
 
-1. In the stacking scenario, the YAML fixes the order `c6 -> c5 -> ... -> c1`. The planner does not infer which cube is largest.
+1. In the stacking scenario, the YAML still provides the stack order `c6 -> c5 -> ... -> c1`. V3 confirms that order through TMM search before execution; it does not infer cube size from geometry.
 2. The 2-D motion probe and physical IK/execution are separate validation layers. Both are recorded, but physical mode uses physical execution to decide per-object success.
-3. The TMM is built after the pick-place loop. It currently does not select the stacking order or send trajectories to the robot.
+3. V3 builds and searches a TMM before MuJoCo execution, confirms every edge has a motion plan, then passes the confirmed order to the existing v2 executor. V1 and v2 entry points remain available.
 
 ## Run the Stacking Scenario
 
 Preview the targets without running MuJoCo:
 
 ```bash
-python3 -m cli.run_stacking_v2 \
+python3 -m cli.run_stacking_v3 \
   --config configs/scenes/stacking_wall_world_v2.yaml \
-  --output runs/stacking_preview \
+  --output runs/stacking_v3_preview \
   --dry-run
 ```
 
 Run the full scenario:
 
 ```bash
-python3 -m cli.run_stacking_v2 \
+python3 -m cli.run_stacking_v3 \
   --config configs/scenes/stacking_wall_world_v2.yaml \
-  --output runs/stacking_v2
+  --output runs/stacking_v3
+```
+
+Run one cube first when checking the viewer or a fresh machine:
+
+```bash
+python3 -m cli.run_stacking_v3 \
+  --config configs/scenes/stacking_wall_world_v2.yaml \
+  --output runs/stacking_v3_1obj \
+  --max-objects 1 \
+  --viewer
 ```
 
 Add `--viewer` to open the MuJoCo viewer. Use `python` instead of `python3` if that is the interpreter name on your system.
 
-After installation, the equivalent entry point is `ctamp-run-stacking-v2`.
+After installation, the equivalent entry point is `ctamp-run-stacking-v3`.
+
+The previous stacking path remains callable with `python3 -m cli.run_stacking_v2` or `ctamp-run-stacking-v2`.
 
 ## End-to-End Flow
 
@@ -43,11 +55,14 @@ flowchart TD
     B --> C["Compute safe-zone preview"]
     B --> D["Compute final stack positions"]
     C --> E["Write safe_zone_preview.yaml"]
-    D --> F["Write continuous_stack.yaml"]
-    F --> G["run_scene_v2"]
+    D --> T["Build V3 TMM"]
+    T --> U["A* + motion visitor"]
+    U --> V3C["confirm_solution"]
+    V3C --> F["Write continuous_stack_v3.yaml"]
+    F --> G["run_scene_v2 executor"]
     G --> H["Load config and build MuJoCo scene"]
-    H --> I["Select object in YAML order"]
-    I --> J["2-D probe for diagnostics and TMM cost"]
+    H --> I["Select object in confirmed order"]
+    I --> J["2-D probe for executor diagnostics"]
     I --> K{"Runtime mode"}
     K -->|"Panda + physical executor"| L["IK + direct joint check + RRT if needed + execution"]
     K -->|"Panda without executor"| V["IK preview"]
@@ -60,19 +75,19 @@ flowchart TD
     X --> M{"Objects remaining?"}
     M -->|"Yes"| I
     M -->|"No"| N["Compute completion"]
-    N --> O["Build ordered TMM"]
-    O --> P["A* searches from root to goal"]
-    P --> Q["solution_found + artifacts"]
+    N --> Q["solution_found + artifacts"]
 ```
 
 The call chain is:
 
 ```text
-cli/run_stacking_v2.py
-  -> ctamp/experiments/run_stacking_v2.py
+cli/run_stacking_v3.py
+  -> ctamp/experiments/run_stacking_v3.py
      -> ctamp/experiments/run_scene_v2.py
         -> ctamp/experiments/run_scene.py
 ```
+
+`run_stacking_v3` reuses the v2 phase-config generator and v2 executor. Its new work is the pre-execution CTAMP pass: TMM construction, A* search, motion planning during expansion, Dewanto-style edge cost, online mean-cost heuristic updates, and confirmation. See [`run_stacking_v3.run()`](ctamp/experiments/run_stacking_v3.py).
 
 `run_scene_v2` does not replace the v1 success logic. It wraps `run_scene` with `plan_xy` caching and MuJoCo batching. See [`run_scene_v2.run()`](ctamp/experiments/run_scene_v2.py#L93-L124).
 
@@ -128,7 +143,7 @@ The initial load is intentionally simple:
 config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 ```
 
-See [`run_stacking_v2.run()`](ctamp/experiments/run_stacking_v2.py#L182-L195).
+See [`run_stacking_v3.run()`](ctamp/experiments/run_stacking_v3.py).
 
 The loader only converts readable YAML into Python data. Required fields are accessed later, so missing fields or unknown object names fail when the pipeline uses them.
 
@@ -137,14 +152,14 @@ The loader only converts readable YAML into Python data. Required fields are acc
 `build_phase_configs()` creates two derived configurations:
 
 1. `safe_zone_preview.yaml`: a flat arrangement for preview and possible future fallback logic.
-2. `continuous_stack.yaml`: the stack target passed to the MuJoCo runner.
+2. `continuous_stack_v3.yaml`: the stack target passed to the MuJoCo runner after V3 confirmation.
 
 See [`build_phase_configs()`](ctamp/experiments/run_stacking_v2.py#L119-L147).
 
-The safe zone is currently preview-only. `run()` executes `continuous_stack.yaml`, not `safe_zone_preview.yaml`.
+The safe zone is currently preview-only. V3 executes `continuous_stack_v3.yaml`, not `safe_zone_preview.yaml`.
 
 ```python
-stack_path = _write_preview_configs(output, safe_zone_config, stack_config)
+stack_path = output / "continuous_stack_v3.yaml"
 
 continuous = run_scene_v2(
     stack_path,
@@ -153,7 +168,7 @@ continuous = run_scene_v2(
 )
 ```
 
-See [`run_stacking_v2.run()`](ctamp/experiments/run_stacking_v2.py#L191-L213).
+See [`run_stacking_v3.run()`](ctamp/experiments/run_stacking_v3.py).
 
 The name `safe_zone` therefore does not mean that the robot automatically moves a failed cube there.
 
@@ -228,7 +243,7 @@ tidy_groups:
       # ... through c1
 ```
 
-`_phase_config()` writes this derived configuration to `continuous_stack.yaml`. See [`run_stacking_v2.py`](ctamp/experiments/run_stacking_v2.py#L89-L116).
+`_phase_config()` builds this derived configuration. V3 writes it to `continuous_stack_v3.yaml`; v2 writes it to `continuous_stack.yaml`. See [`run_stacking_v2.py`](ctamp/experiments/run_stacking_v2.py#L89-L116) and [`run_stacking_v3.py`](ctamp/experiments/run_stacking_v3.py).
 
 ## 3. Object Ordering
 
@@ -391,6 +406,10 @@ See home X-Y in [`run_scene.py`](ctamp/experiments/run_scene.py#L84-L90). See th
 If transfer fails, `probe_transfer()` repeats the query up to `max_retries_per_object`. The geometric query is deterministic, so retries currently do not generate new candidates.
 
 See [`probe_transfer()`](ctamp/experiments/scene_helpers.py#L54-L69).
+
+V3 adds one pre-execution fallback only inside the CTAMP confirmation pass: if the standard 2-D probe fails, it tries X-side corridor polylines around the inflated wall. This is used to confirm the V3 TMM path; the downstream v2 executor still records its own geometric probe diagnostics.
+
+See [`StackingV3MotionVisitor._plan_x_corridor()`](ctamp/experiments/run_stacking_v3.py).
 
 ## 6. From World Targets to IK and Joint Trajectories
 
@@ -557,6 +576,8 @@ See [`run_scene.py`](ctamp/experiments/run_scene.py#L477-L498).
 
 Physical execution may succeed even when the 2-D probe records `route_type: failed`. This is not a contradiction because physical IK/RRT is the primary validator in that mode.
 
+In console logs, `geometric=False ik=True` means the coarse 2-D probe failed, but Panda IK and physical execution still succeeded.
+
 ### Whole-Stack Success
 
 The YAML uses:
@@ -614,31 +635,33 @@ It is a multigraph because two vertices can have multiple parallel edges, such a
 
 See [`TaskMotionMultigraph`](ctamp/tmm/multigraph.py#L12-L37) and the [`Vertex`/`Edge`](ctamp/domain/models.py#L67-L82) models.
 
-In the active ordered TMM, every vertex still shares placeholder `RobotState` and `WorkspaceState` objects. `root`, `pick`, `place`, and `goal` are milestones, not distinct state snapshots.
+In V3, every vertex still shares one `RobotState` and one `WorkspaceState` built from the stacking YAML. `root`, `pick`, `place`, and `goal` are milestones, not full state transitions.
 
-Fields such as `holding_object_id` and workspace poses are not updated between vertices by the active builder.
+Fields such as `holding_object_id` and workspace poses are not updated between vertices by the V3 builder.
 
-See [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L180).
+See [`_build_v3_tmm()`](ctamp/experiments/run_stacking_v3.py).
 
 ### When the TMM Is Built
 
-The active stacking runtime follows this order:
+V3 follows this order:
 
 ```text
-YAML fixes order
--> motion probe
--> IK/RRT
--> physical execution
--> collect all object results
--> build_ordered_tmm
+YAML + generated stack targets
+-> build V3 TMM
 -> TMMAStar.search
+-> StackingV3MotionVisitor plans edges during expansion
+-> confirm_solution(path_edges)
+-> write continuous_stack_v3.yaml with confirmed order
+-> run_scene_v2 executes in MuJoCo
 ```
 
-The object loop finishes before the TMM is built in [`run_scene.py`](ctamp/experiments/run_scene.py#L427-L530).
+The V3 TMM pass runs before MuJoCo execution in [`run_stacking_v3.py`](ctamp/experiments/run_stacking_v3.py).
 
-The current TMM does not select `c6` first, generate the stack target, or move the Panda.
+The V3 TMM confirms the configured stack order. It still does not infer the order from cube sizes and does not send joint trajectories directly to Panda; the v2 executor handles physical motion.
 
-### Ordered TMM Construction
+The v2 stacking runtime still builds an ordered TMM after the pick-place loop in [`run_scene.py`](ctamp/experiments/run_scene.py#L427-L530). That path remains available for comparison.
+
+### V3 TMM Construction
 
 Each object creates two vertices:
 
@@ -660,26 +683,15 @@ flowchart LR
 Each connection has two parallel edges:
 
 ```text
-left_arm
-left_arm_redundant
+panda_xy_probe   # 2D probe joint space
+panda_left_arm   # 7D Panda joint space label
 ```
 
-Both currently contain the same seven Panda joints. The `redundant` name does not yet represent a different joint-space dimension.
+The motion visitor sorts these alternatives by dimension and tries the 2-D probe first.
 
-The builder also attaches the same `motion` object to transit and transfer edges. The `motions` dictionary contains transfer results; the actual transit plan is not passed to the builder.
+Transit edges use `current_xy -> object.pose[:2]`. Transfer edges use `object.pose[:2] -> stack slot[:2]`. The `done` edge has identical start and goal X-Y.
 
-Transit cost is zero, so this does not change the A* cost. However, a TMM transit edge should not be interpreted as containing the actual physical transit motion.
-
-Assigned costs are:
-
-```text
-transit cost  = 0
-transfer cost = motion.length if motion succeeds
-transfer cost = 1_000_000 if motion fails
-done cost     = 0
-```
-
-See [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L232).
+See [`_add_action_edges()`](ctamp/experiments/run_stacking_v3.py) and [`StackingV3MotionVisitor.on_expand()`](ctamp/experiments/run_stacking_v3.py).
 
 For `n` objects:
 
@@ -689,6 +701,30 @@ edge count   = 4n + 2
 ```
 
 Six cubes produce `14` vertices and `26` edges.
+
+### V3 Edge Cost
+
+V3 assigns cost after motion planning. A successful edge stores a `MotionPlan`, sets `flag_motion_planned=true`, and gets:
+
+```text
+edge_cost = result_cost + process_cost
+
+result_cost  = smoothness + length + clearance
+process_cost = iteration + joint_space + planning_time + penalty
+```
+
+Where:
+
+```text
+iteration   = exp((attempt_index - 1) / attempt_index)
+joint_space = exp(joint_space_dim / max_joint_dim)
+penalty     = 0 on success
+penalty     = max_smoothing_time + max_result_prediction on failure
+```
+
+The implementation records the component breakdown under `motion_plan.metadata["dewanto_cost"]`.
+
+See [`DewantoEdgeCost.compute()`](ctamp/experiments/run_stacking_v3.py).
 
 ### A* Search
 
@@ -703,37 +739,49 @@ The node with the smallest `f` is expanded first. Search succeeds when it reache
 
 See [`TMMAStar.search()`](ctamp/search/tmm_astar.py#L122-L203).
 
-The default heuristic is zero. In this runtime, A* is effectively uniform-cost search over one ordered branch.
+V3 uses `OnlineMeanRemainingCost`: remaining unit steps to goal multiplied by the mean cost of successful edges seen so far. The mean updates during vertex expansion.
 
-See [`TMMAStar.__init__()`](ctamp/search/tmm_astar.py#L107-L120).
+See [`OnlineMeanRemainingCost`](ctamp/experiments/run_stacking_v3.py).
 
-`TMMAStar()` also uses `MockVisitor` by default. The active search does not call the motion planner or IK; it reads existing edges and costs.
+`TMMAStar` calls `StackingV3MotionVisitor.on_expand()`. That visitor motion-plans outgoing edges, stores samples, updates cost, and updates the online heuristic on successful edges.
 
-A failed edge remains in the graph with cost `1_000_000`, so A* can still reach the goal. In non-physical mode, completion rejects the failed motion because the object also fails.
+After search, V3 calls `confirm_solution(path_edges)`. If any path edge lacks a successful `MotionPlan`, the confirmed plan is empty and MuJoCo execution is skipped.
 
-In physical mode, an object may pass through physical execution even when the 2-D probe fails. A high-cost TMM edge therefore does not automatically make `solution_found` false.
+See [`confirm_solution()`](ctamp/planning/confirmation.py#L28-L47).
+
+### V2 Ordered TMM
+
+The v2 executor still builds its old ordered TMM after the object loop. It reads existing per-object motion results and costs, and does not call the motion planner from A*.
+
+See [`build_ordered_tmm()`](ctamp/experiments/scene_helpers.py#L155-L232).
 
 ### TMM Outputs
 
-The TMM exists in memory and is not serialized as a graph. The runtime writes only:
+V3 does not serialize the NetworkX graph itself. It writes a plan summary with path edges, costs, heuristic state, and learning samples:
 
 ```text
-tmm_vertices
-tmm_edges
-expanded_vertices
+ctamp_v3_plan.json
+metrics.json -> ctamp_v3
 ```
 
-`final_plan.json` comes from `plan_actions` collected during the object loop, not from `search_result.path_edges`.
+Important V3 fields:
 
-`metrics.total_cost` is also not `search_result.cost`. It sums transit and transfer lengths for successful objects; the TMM search cost is not serialized.
+```text
+ctamp_v3.search_success
+ctamp_v3.confirmation_success
+ctamp_v3.path_edges
+ctamp_v3.total_cost
+ctamp_v3.heuristic.online_updates
+ctamp_v3.learning_samples
+```
 
-See action collection in [`run_scene.py`](ctamp/experiments/run_scene.py#L477-L513) and output writing in [`run_scene.py`](ctamp/experiments/run_scene.py#L569-L592).
+The downstream `continuous_stack/final_plan.json` still comes from the v2 executor's physical object loop, not directly from `search_result.path_edges`.
 
 ### Generic TMM vs. Active Stacking TMM
 
 The repository also includes generic `SymbolicTaskPlanner` and `TMMGraphBuilder` modules for expanding task and joint-space alternatives.
 
-The stacking runner uses the specialized `build_ordered_tmm()`. The generic modules should not be interpreted as selecting the order in active stacking runs.
+The stacking runners use specialized builders: V3 uses `_build_v3_tmm()` before execution, and v2 uses `build_ordered_tmm()` after execution. The generic modules should not be interpreted as selecting the order in active stacking runs.
 
 See [`ctamp/planning/symbolic.py`](ctamp/planning/symbolic.py) and [`ctamp/tmm/builder.py`](ctamp/tmm/builder.py).
 
@@ -742,9 +790,10 @@ See [`ctamp/planning/symbolic.py`](ctamp/planning/symbolic.py) and [`ctamp/tmm/b
 A stacking run writes:
 
 ```text
-runs/stacking_v2/
+runs/stacking_v3/
 |-- safe_zone_preview.yaml
-|-- continuous_stack.yaml
+|-- continuous_stack_v3.yaml
+|-- ctamp_v3_plan.json
 |-- stacking_plan.json
 |-- metrics.json
 `-- continuous_stack/
@@ -755,17 +804,18 @@ runs/stacking_v2/
     `-- OBSERVATION.md
 ```
 
-See wrapper outputs in [`run_stacking_v2.py`](ctamp/experiments/run_stacking_v2.py#L150-L213).
+See wrapper outputs in [`run_stacking_v3.py`](ctamp/experiments/run_stacking_v3.py).
 
 See scene-runner outputs in [`run_scene.py`](ctamp/experiments/run_scene.py#L569-L617).
 
 Recommended verification order:
 
 1. Open `stacking_plan.json` and confirm the order and Z targets.
-2. Open `continuous_stack/metrics.json` for per-object diagnostics.
-3. Check `physical_grip_success`, `physical_lift_height`, `physical_tidy_success`, and `placement_error`.
-4. Confirm that `failed_objects` is empty and strict completion is `1.0`.
-5. Check `solution_found` in the outer `metrics.json`.
+2. Open `ctamp_v3_plan.json` and confirm `search_success`, `confirmation_success`, and `path_edges`.
+3. Open `continuous_stack/metrics.json` for per-object diagnostics.
+4. Check `physical_grip_success`, `physical_lift_height`, `physical_tidy_success`, and `placement_error`.
+5. Confirm that `failed_objects` is empty and strict completion is `1.0`.
+6. Check `solution_found` in the outer `metrics.json`.
 
 `challenge_ablation.json` describes direct and corridor routes in the 2-D probe. It is not evidence of physical tower stability.
 
@@ -785,16 +835,21 @@ The golden dry-run verifies the order and the generated safe-zone and final posi
 
 See [`tests/test_golden_regression.py`](tests/test_golden_regression.py#L42-L60).
 
+The V3 dry-run test verifies that TMM search, confirmation, online heuristic updates, and `continuous_stack_v3.yaml` generation work without launching MuJoCo.
+
+See [`tests/test_stacking_v3.py`](tests/test_stacking_v3.py).
+
 Run the relevant tests with:
 
 ```bash
 python3 -m pytest -q tests/test_migrated_pipeline.py
+python3 -m pytest -q tests/test_stacking_v3.py
 python3 -m pytest -q \
   tests/test_golden_regression.py::test_stacking_dry_run_golden \
   -m simulation
 ```
 
-The current automated tests verify ordering and target generation. They are not full regression tests for the physical stability of a six-cube tower.
+The current automated tests verify ordering, target generation, and V3 CTAMP dry-run confirmation. They are not full regression tests for the physical stability of a six-cube tower.
 
 ## Other Entry Points
 
@@ -820,6 +875,14 @@ Performance-oriented v2 path:
 python3 -m cli.run_simulation_v2 \
   --config configs/scenes/align_grouped_tidy_wall_world.yaml \
   --output runs/example_v2
+```
+
+Previous stacking v2 path:
+
+```bash
+python3 -m cli.run_stacking_v2 \
+  --config configs/scenes/stacking_wall_world_v2.yaml \
+  --output runs/stacking_v2
 ```
 
 If `--output` is omitted, the CLI writes artifacts to a timestamped directory under `runs/`.
